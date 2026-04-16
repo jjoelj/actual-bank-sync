@@ -13,7 +13,13 @@ const HOST_SCRIPT = resolve(__dirname, "index.js");
 const HOST_NAME = "com.actual.banksync";
 
 const configPath = resolve(__dirname, "../config.json");
-const { extensionId: EXTENSION_ID } = JSON.parse(readFileSync(configPath, "utf8"));
+let EXTENSION_ID;
+try {
+  ({ extensionId: EXTENSION_ID } = JSON.parse(readFileSync(configPath, "utf8")));
+} catch {
+  console.error("Error: config.json not found. Copy config.example.json to config.json and fill in your extension ID.");
+  process.exit(1);
+}
 
 if (!EXTENSION_ID || EXTENSION_ID === "YOUR_EXTENSION_ID_HERE") {
   console.error("Error: open packages/host/config.json and set your extension ID first.");

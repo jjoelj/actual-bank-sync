@@ -28,7 +28,13 @@ npm install
 
 ### 3. Register the native messaging host
 
-Open `packages/host/config.json` and paste in the extension ID you copied in step 2:
+Copy the config template and fill in your extension ID:
+
+```bash
+cp packages/host/config.example.json packages/host/config.json
+```
+
+Then edit `packages/host/config.json`:
 
 ```json
 {
