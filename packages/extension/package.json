@@ -1,0 +1,6 @@
+{
+  "name": "actual-bank-sync-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension for syncing bank transactions to Actual Budget"
+}

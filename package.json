@@ -1,0 +1,8 @@
+{
+  "name": "actual-bank-sync",
+  "private": true,
+  "workspaces": [
+    "packages/extension",
+    "packages/host"
+  ]
+}

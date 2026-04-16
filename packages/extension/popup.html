@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Actual Bank Sync</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 380px;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+    }
+
+    header {
+      background: #16213e;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e94560;
+      letter-spacing: 0.5px;
+    }
+
+    #sync-btn {
+      background: #e94560;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 5px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    #sync-btn:hover { background: #c73652; }
+    #sync-btn:disabled { background: #555; cursor: not-allowed; }
+
+    section {
+      padding: 12px 16px;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    section h2 {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      margin-bottom: 10px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #aaa;
+      font-size: 11px;
+    }
+
+    input {
+      display: block;
+      width: 100%;
+      margin-top: 3px;
+      background: #0f3460;
+      border: 1px solid #1a4a80;
+      border-radius: 4px;
+      color: #e0e0e0;
+      padding: 5px 8px;
+      font-size: 12px;
+      outline: none;
+    }
+
+    input:focus { border-color: #e94560; }
+
+    #save-settings-btn {
+      margin-top: 10px;
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a4a80;
+      border-radius: 4px;
+      padding: 5px 12px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    #save-settings-btn:hover { background: #1a4a80; }
+
+    /* Account rows */
+    .account-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .account-label {
+      flex: 1;
+      color: #ccc;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    select {
+      flex: 1;
+      background: #0f3460;
+      border: 1px solid #1a4a80;
+      border-radius: 4px;
+      color: #e0e0e0;
+      padding: 4px 6px;
+      font-size: 12px;
+      outline: none;
+    }
+
+    select:focus { border-color: #e94560; }
+
+    .remove-btn {
+      background: transparent;
+      border: none;
+      color: #555;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 2px;
+      line-height: 1;
+    }
+
+    .remove-btn:hover { color: #e94560; }
+
+    /* Add account area */
+    #add-account-area {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      position: relative;
+    }
+
+    #add-account-btn {
+      background: transparent;
+      border: 1px dashed #444;
+      color: #888;
+      border-radius: 4px;
+      padding: 5px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      width: 100%;
+      text-align: left;
+    }
+
+    #add-account-btn:hover {
+      border-color: #e94560;
+      color: #e94560;
+    }
+
+    #account-type-dropdown {
+      position: absolute;
+      bottom: 100%;
+      left: 0;
+      right: 0;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 4px;
+      z-index: 10;
+      margin-top: 2px;
+      display: none;
+      max-height: 150px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #e94560 #0f3460;
+    }
+
+    #account-type-dropdown::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #account-type-dropdown::-webkit-scrollbar-track {
+      background: #0f3460;
+      border-radius: 4px;
+    }
+
+    #account-type-dropdown::-webkit-scrollbar-thumb {
+      background: #e94560;
+      border-radius: 4px;
+    }
+
+    #account-type-dropdown.open { display: block; }
+
+    #accounts-section {
+      padding-bottom: 20px;
+    }
+
+    .dropdown-option {
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #ccc;
+    }
+
+    .dropdown-option:hover {
+      background: #0f3460;
+      color: #e0e0e0;
+    }
+
+    .dropdown-option.disabled {
+      color: #666;
+      cursor: not-allowed;
+    }
+
+    .dropdown-option.disabled:hover {
+      background: transparent;
+      color: #666;
+    }
+
+    option:disabled {
+      color: #666;
+    }
+
+    #accounts-list {
+      margin-bottom: 8px;
+    }
+
+    #save-mappings-btn {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a4a80;
+      border-radius: 4px;
+      padding: 5px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      display: none;
+    }
+
+    #save-mappings-btn:hover { background: #1a4a80; }
+
+    #status {
+      padding: 10px 16px;
+      font-size: 11px;
+      color: #888;
+      min-height: 32px;
+    }
+
+    #status.error { color: #e94560; }
+    #status.ok { color: #4caf50; }
+
+    .empty-msg { color: #555; font-style: italic; font-size: 12px; }
+
+    .account-sub {
+      font-size: 10px;
+      color: #4caf50;
+      margin-top: 1px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⬡ Actual Bank Sync</h1>
+  <button id="sync-btn" style="display:none">Sync Now</button>
+</header>
+
+<!-- Settings -->
+<section>
+  <h2 id="settings-toggle" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+    Actual Settings <span id="settings-chevron">▾</span>
+  </h2>
+  <div id="settings-body">
+    <label>
+      Server URL
+      <input id="actual-url" type="url" placeholder="http://localhost:5006" />
+    </label>
+    <label>
+      Password
+      <input id="actual-password" type="password" placeholder="••••••••" />
+    </label>
+    <button id="connect-btn" style="margin-top:10px;background:#e94560;color:white;border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:12px;font-weight:600;">Connect</button>
+
+    <div id="budget-fields" style="display:none">
+      <label style="margin-top:10px">
+        Sync ID
+        <input id="actual-sync-id" type="password" placeholder="abc-123" />
+      </label>
+      <label>
+        File Password (if encrypted)
+        <input id="actual-file-password" type="password" placeholder="leave blank if none" />
+      </label>
+      <button id="save-settings-btn">Save Settings</button>
+    </div>
+  </div>
+</section>
+
+<!-- Account Mappings -->
+<section id="accounts-section" style="display:none">
+  <h2>Accounts</h2>
+
+  <div id="sync-from-section" style="display:none;margin-bottom:10px;">
+    <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:4px;">
+      Start syncing from
+      <span id="sync-from-tooltip" title="Applies to any accounts that haven't been synced yet. Already-synced accounts will continue from where they left off." style="cursor:help;color:#555;font-size:13px;">ⓘ</span>
+    </label>
+    <input id="sync-from-date" type="date" style="margin-top:4px;" />
+  </div>
+  <div id="accounts-list"></div>
+
+  <div id="add-account-area">
+    <button id="add-account-btn">+ Add account</button>
+    <div id="account-type-dropdown"></div>
+  </div>
+</section>
+
+<div id="status">Last sync: never</div>
+
+<script src="src/popup.js"></script>
+</body>
+</html>

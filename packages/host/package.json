@@ -1,0 +1,14 @@
+{
+  "name": "actual-bank-sync-host",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Native messaging host for Actual Bank Sync",
+  "main": "src/index.js",
+  "scripts": {
+    "install-host": "node src/install.js"
+  },
+  "dependencies": {
+    "@actual-app/api": "^26.4.0"
+  }
+}
