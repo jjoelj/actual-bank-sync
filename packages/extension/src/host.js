@@ -4,7 +4,7 @@ let nextRequestId = 1;
 
 export function sendToHost(command, payload = {}) {
     return new Promise((resolve, reject) => {
-        const port = chrome.runtime.connectNative("com.actual.banksync");
+        const port = chrome.runtime.connectNative("com.github.jjoelj.actualbanksync");
         const id = nextRequestId++;
 
         port.onMessage.addListener((msg) => {

@@ -10,7 +10,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOST_SCRIPT = resolve(__dirname, "index.js");
-const HOST_NAME = "com.actual.banksync";
+const HOST_NAME = "com.github.jjoelj.actualbanksync";
 
 const configPath = resolve(__dirname, "../config.json");
 let EXTENSION_ID;
@@ -101,25 +101,43 @@ function installWindows() {
 }
 
 function installMac() {
-  const manifestPath = resolve(
-    process.env.HOME,
-    "Library/Application Support/Google/Chrome/NativeMessagingHosts",
-    `${HOST_NAME}.json`
-  );
-  writeManifestFile(manifestPath);
+  const browserPaths = {
+    Chrome: resolve(process.env.HOME, "Library/Application Support/Google/Chrome/NativeMessagingHosts", `${HOST_NAME}.json`),
+    Edge:   resolve(process.env.HOME, "Library/Application Support/Microsoft Edge/NativeMessagingHosts", `${HOST_NAME}.json`),
+  };
+
+  let first = true;
+  for (const [, manifestPath] of Object.entries(browserPaths)) {
+    if (first) {
+      writeManifestFile(manifestPath);
+      first = false;
+    } else {
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      console.log(`Manifest written to: ${manifestPath}`);
+    }
+  }
   console.log("Mac install complete.");
 }
 
 function installLinux() {
-  const manifestPath = resolve(
-    process.env.HOME,
-    ".config/google-chrome/NativeMessagingHosts",
-    `${HOST_NAME}.json`
-  );
-  writeManifestFile(manifestPath);
+  const browserPaths = {
+    Chrome: resolve(process.env.HOME, ".config/google-chrome/NativeMessagingHosts", `${HOST_NAME}.json`),
+    Edge:   resolve(process.env.HOME, ".config/microsoft-edge/NativeMessagingHosts", `${HOST_NAME}.json`),
+  };
+
+  let first = true;
+  for (const [, manifestPath] of Object.entries(browserPaths)) {
+    if (first) {
+      writeManifestFile(manifestPath);
+      first = false;
+    } else {
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      console.log(`Manifest written to: ${manifestPath}`);
+    }
+  }
   console.log("Linux install complete.");
 }
 
 console.log(`\nDone! Native messaging host "${HOST_NAME}" registered.`);
-console.log(`\nIMPORTANT: Open src/install.js and replace YOUR_EXTENSION_ID_HERE`);
-console.log(`with the actual extension ID from chrome://extensions`);

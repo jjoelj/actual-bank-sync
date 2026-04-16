@@ -2,14 +2,25 @@
 
 Automatically syncs bank transactions to [Actual Budget](https://actualbudget.org) via a Chrome/Edge extension + native messaging host.
 
-## Structure
+## Supported Banks
 
-```
-actual-bank-sync/
-  packages/
-    extension/          # Chrome MV3 extension (plain JS, no build step)
-    host/               # Node.js native messaging host
-```
+These are the specific cards/accounts this has been tested with. Similar accounts at the same institutions may work, but are untested.
+
+| Institution | Account |
+|---|---|
+| SoFi | Checking, Savings, Credit Card |
+| Wells Fargo | Autograph Card |
+| Capital One | Savor Card |
+| Fidelity | Visa Signature Card |
+| BILT | BILT Mastercard |
+| Target | Circle Card |
+| Venmo | Venmo Cash |
+
+## Requirements
+
+- Chrome or Edge
+- [Node.js](https://nodejs.org)
+- A running [Actual Budget](https://actualbudget.org) server
 
 ## Setup
 
@@ -34,7 +45,7 @@ Copy the config template and fill in your extension ID:
 cp packages/host/config.example.json packages/host/config.json
 ```
 
-Then edit `packages/host/config.json`:
+Edit `packages/host/config.json`:
 
 ```json
 {
@@ -49,40 +60,47 @@ cd packages/host
 node src/install.js
 ```
 
-This registers the host with Chrome so the extension can talk to it.
+This registers the host with Chrome/Edge so the extension can communicate with Node.js locally.
 
-### 4. Configure the extension
+### 4. Connect to Actual
 
-Click the extension icon → fill in your Actual Budget settings:
-- **Server URL**: e.g. `http://localhost:5006`
-- **Password**: your Actual server password
-- **Budget ID**: found in Actual → Settings → Sync
+Click the extension icon and enter your Actual Budget settings:
 
-### 5. Map accounts
+- **Server URL** — e.g. `http://localhost:5006`
+- **Password** — your Actual server password
 
-Click **Load Bank Accounts** in the popup. This will briefly open a SoFi tab to read your account list, then let you map each SoFi account to an Actual account.
+Click **Connect**, then enter your:
 
-Click **Save Mappings** when done.
+- **Sync ID** — found in Actual → Settings → Sync
+- **File Password** — only if your budget file is encrypted
+
+Click **Save Settings**.
+
+### 5. Add accounts
+
+Click **+ Add account**, select a bank, and map it to the corresponding account in Actual. Repeat for each account you want to sync.
+
+Set a **start date** for any accounts that haven't been synced before.
 
 ### 6. Sync
 
-Click **Sync Now** or wait for the daily automatic sync (triggers when the browser opens each day).
-
-## Supported Banks
-
-- [x] SoFi (checking + savings, CSV export)
-- [ ] Wells Fargo (OFX Direct Connect)
-- [ ] Fidelity (OFX Direct Connect)
-- [ ] Capital One / Savor
-- [ ] BILT / Cardless
-- [ ] Target Circle
-- [ ] Venmo Credit (PDF statements)
+Click **Sync Now** to run immediately, or let it run automatically once per day when Chrome is open.
 
 ## How it works
 
-1. **Daily alarm** fires when Chrome starts
-2. Background script opens the bank tab silently, waits for login + data to load
-3. Fetches transactions (CSV for SoFi) from last sync date → today
-4. Sends transactions to the **native messaging host** (a local Node.js process)
-5. Host uses `@actual-app/api` to import into Actual Budget
-6. Actual deduplicates via `imported_id` — safe to run multiple times
+1. A daily alarm fires when Chrome starts
+2. For each mapped account, the background script opens the bank's page, waits for it to load, and downloads transactions
+3. Transactions are sent to the native messaging host (a local Node.js process)
+4. The host uses `@actual-app/api` to import them into Actual Budget
+5. Actual deduplicates by `imported_id` — safe to run multiple times
+
+Transaction data is cached locally at:
+- **Windows**: `%APPDATA%\actual-bank-sync`
+- **Mac**: `~/Library/Application Support/actual-bank-sync`
+- **Linux**: `~/.config/actual-bank-sync`
+
+## Notes
+
+- The extension opens bank tabs in the background to fetch transactions. Some banks may require you to be logged in first.
+- This uses screen-scraping and CSV exports, not official bank APIs. Banks can change their websites at any time and break things.
+- Using automated scripts to access bank accounts may violate your bank's terms of service. Use at your own risk.
