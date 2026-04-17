@@ -63,7 +63,7 @@ async function runSync() {
   }
 
   if (accountMappings["sofi-credit"] || Object.keys(accountMappings).some(k => k.startsWith("sofi-"))) await syncSoFi(settings, accountMappings);
-  if (accountMappings["venmo-cash"]) await syncVenmo(settings, accountMappings);
+  if (accountMappings["venmo-cash"] || accountMappings["venmo-credit"]) await syncVenmo(settings, accountMappings);
   if (accountMappings["bilt-credit"]) await syncBilt(settings, accountMappings);
   if (accountMappings["capitalone-credit"]) await syncCapitalOne(settings, accountMappings);
   if (accountMappings["fidelity-credit"]) await syncFidelity(settings, accountMappings);
@@ -112,6 +112,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     getSoFiAccountsForPopup()
       .then((accounts) => sendResponse({ accounts }))
       .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "IMPORT_TRANSACTIONS") {
+    sendToHost("importTransactions", {
+      settings: msg.settings,
+      accountId: msg.accountId,
+      transactions: msg.transactions,
+    })
+        .then((result) => sendResponse({ result }))
+        .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 });

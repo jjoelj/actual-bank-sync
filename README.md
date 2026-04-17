@@ -14,7 +14,7 @@ These are the specific cards/accounts this has been tested with. Similar account
 | Fidelity | Visa Signature Card |
 | BILT | BILT Mastercard |
 | Target | Circle Card |
-| Venmo | Venmo Cash |
+| Venmo | Venmo Cash, Venmo Credit Card |
 
 ## Requirements
 

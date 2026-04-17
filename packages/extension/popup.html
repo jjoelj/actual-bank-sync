@@ -16,11 +16,13 @@
 
     header {
       background: #16213e;
-      padding: 12px 16px;
+      padding: 8px 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       border-bottom: 1px solid #0f3460;
+      flex-wrap: wrap;
+      gap: 4px;
     }
 
     header h1 {
@@ -45,7 +47,7 @@
     #sync-btn:disabled { background: #555; cursor: not-allowed; }
 
     section {
-      padding: 12px 16px;
+      padding: 8px 12px;
       border-bottom: 1px solid #0f3460;
     }
 
@@ -55,12 +57,12 @@
       text-transform: uppercase;
       letter-spacing: 1px;
       color: #888;
-      margin-bottom: 10px;
+      margin-bottom: 6px;
     }
 
     label {
       display: block;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       color: #aaa;
       font-size: 11px;
     }
@@ -97,8 +99,8 @@
     .account-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
+      gap: 6px;
+      margin-bottom: 4px;
     }
 
     .account-label {
@@ -195,7 +197,7 @@
     #account-type-dropdown.open { display: block; }
 
     #accounts-section {
-      padding-bottom: 20px;
+      padding-bottom: 8px;
     }
 
     .dropdown-option {
@@ -242,10 +244,9 @@
     #save-mappings-btn:hover { background: #1a4a80; }
 
     #status {
-      padding: 10px 16px;
       font-size: 11px;
       color: #888;
-      min-height: 32px;
+      flex-basis: 100%;
     }
 
     #status.error { color: #e94560; }
@@ -265,6 +266,7 @@
 <header>
   <h1>⬡ Actual Bank Sync</h1>
   <button id="sync-btn" style="display:none">Sync Now</button>
+  <div id="status">Last sync: never</div>
 </header>
 
 <!-- Settings -->
@@ -313,10 +315,9 @@
   <div id="add-account-area">
     <button id="add-account-btn">+ Add account</button>
     <div id="account-type-dropdown"></div>
+
   </div>
 </section>
-
-<div id="status">Last sync: never</div>
 
 <script src="src/popup.js"></script>
 </body>

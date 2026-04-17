@@ -1,7 +1,8 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, waitForTabClose, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
+import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncWellsFargo(settings, accountMappings, retried = false) {
+export async function syncWellsFargo(settings, accountMappings) {
+    console.log("Wells Fargo: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
     const startDate = lastSyncDates["wf-credit"] || syncFromDate;
 
@@ -31,16 +32,7 @@ export async function syncWellsFargo(settings, accountMappings, retried = false)
         console.log("WF download URL:", wfData.downloadUrl);
     } catch (err) {
         chrome.tabs.remove(tab.id);
-        if (retried) {
-            console.error("WF: login failed after retry, giving up.");
-            return;
-        }
-        const tab2 = await openTabBackground("https://connect.secure.wellsfargo.com/services/downloadactivity/showform");
-        chrome.tabs.update(tab2.id, { active: true });
-        chrome.windows.update(tab2.windowId, { focused: true });
-        console.log("WF: waiting for login...");
-        await waitForTabClose(tab2.id);
-        await syncWellsFargo(settings, accountMappings, true);
+        console.error("WF: login failed, giving up.");
         return;
     }
 
@@ -88,21 +80,32 @@ export async function syncWellsFargo(settings, accountMappings, retried = false)
 
 function pollForWFData(tabId) {
     return new Promise((resolve, reject) => {
-        const start = Date.now();
+        let dataPageStart = null;
         let wfState = "click-card";
         let clickedCard = false;
         let clickedDownload = false;
 
         const interval = setInterval(async () => {
-            if (Date.now() - start > POLL_TIMEOUT_MS) {
-                clearInterval(interval);
-                reject(new Error("Timed out waiting for WF data"));
-                return;
-            }
-
             try {
                 const tab = await chrome.tabs.get(tabId);
                 console.log("WF state:", wfState, "url:", tab.url);
+
+                const onWFPage = tab.url?.includes("wellsfargo.com") && (
+                    tab.url.includes("accountsummary") ||
+                    tab.url.includes("accountdetails") ||
+                    tab.url.includes("download-account-activity")
+                );
+                if (!onWFPage) {
+                    dataPageStart = null;
+                    return;
+                }
+
+                if (!dataPageStart) dataPageStart = Date.now();
+                if (Date.now() - dataPageStart > POLL_TIMEOUT_MS) {
+                    clearInterval(interval);
+                    reject(new Error("Timed out waiting for WF data"));
+                    return;
+                }
 
                 if (tab.status !== "complete") return;
 

@@ -69,16 +69,6 @@ export function openTabBackground(url) {
     });
 }
 
-export function waitForTabClose(tabId) {
-    return new Promise((resolve) => {
-        chrome.tabs.onRemoved.addListener(function listener(closedTabId) {
-            if (closedTabId === tabId) {
-                chrome.tabs.onRemoved.removeListener(listener);
-                resolve();
-            }
-        });
-    });
-}
 
 export async function updateLastSyncDate(key, date) {
     const { lastSyncDates = {} } = await chrome.storage.local.get("lastSyncDates");

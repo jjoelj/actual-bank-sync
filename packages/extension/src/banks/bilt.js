@@ -2,7 +2,8 @@ import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLin
 import { sendToHost } from '../host.js'
 import { updateLastSyncDate } from '../utils.js'
 
-export async function syncBilt(settings, accountMappings, retried = false) {
+export async function syncBilt(settings, accountMappings) {
+    console.log("Bilt: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
     const startDate = lastSyncDates["bilt-credit"] || syncFromDate;
 
@@ -29,11 +30,7 @@ export async function syncBilt(settings, accountMappings, retried = false) {
     try {
         biltData = await pollForBiltData(tab.id);
     } catch (err) {
-        if (retried) {
-            console.error("Bilt: login failed after retry, giving up.");
-            return;
-        }
-        await syncBilt(settings, accountMappings, true);
+        console.error("Bilt: login failed, giving up.");
         return;
     }
 

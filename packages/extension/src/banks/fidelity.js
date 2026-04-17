@@ -1,7 +1,8 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, waitForTabClose, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
+import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncFidelity(settings, accountMappings, retried = false) {
+export async function syncFidelity(settings, accountMappings) {
+    console.log("Fidelity: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
     const startDate = lastSyncDates["fidelity-credit"] || syncFromDate;
 
@@ -30,16 +31,7 @@ export async function syncFidelity(settings, accountMappings, retried = false) {
         fidelityData = await pollForFidelityData(tab.id);
     } catch (err) {
         chrome.tabs.remove(tab.id);
-        if (retried) {
-            console.error("Fidelity: login failed after retry, giving up.");
-            return;
-        }
-        const tab2 = await openTabBackground("https://www.fidelity.com");
-        chrome.tabs.update(tab2.id, { active: true });
-        chrome.windows.update(tab2.windowId, { focused: true });
-        console.log("Fidelity: waiting for login...");
-        await waitForTabClose(tab2.id);
-        await syncFidelity(settings, accountMappings, true);
+        console.error("Fidelity: login failed, giving up.");
         return;
     }
 
@@ -83,21 +75,29 @@ export async function syncFidelity(settings, accountMappings, retried = false) {
 
 function pollForFidelityData(tabId) {
     return new Promise((resolve, reject) => {
-        const start = Date.now();
+        let dataPageStart = null;
         let trackingTabId = tabId;
         let clickedDownload = false;
-        let fidelityState = "click-card"; // states: click-card, click-download, get-data
+        let fidelityState = "click-card";
 
         const interval = setInterval(async () => {
-            if (Date.now() - start > POLL_TIMEOUT_MS) {
-                clearInterval(interval);
-                reject(new Error("Timed out waiting for Fidelity data"));
-                return;
-            }
-
             try {
                 const tab = await chrome.tabs.get(trackingTabId);
                 console.log("fidelity state:", fidelityState, "url:", tab.url, "status:", tab.status);
+
+                const onFidelityPage = tab.url?.includes("digital.fidelity.com") || tab.url?.includes("login.fidelityrewards.com");
+                if (!onFidelityPage) {
+                    dataPageStart = null;
+                    return;
+                }
+
+                if (!dataPageStart) dataPageStart = Date.now();
+                if (Date.now() - dataPageStart > POLL_TIMEOUT_MS) {
+                    clearInterval(interval);
+                    reject(new Error("Timed out waiting for Fidelity data"));
+                    return;
+                }
+
                 if (tab.status !== "complete") return;
 
                 if (fidelityState === "click-card" && tab.url?.includes("digital.fidelity.com")) {
@@ -152,18 +152,6 @@ function pollForFidelityData(tabId) {
             }
         }, POLL_INTERVAL_MS);
     });
-}
-
-async function getCardLast4(tabId) {
-    const result = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-            const link = Array.from(document.querySelectorAll("a[id]"))
-                .find(a => /^\d{4}$/.test(a.id));
-            return link?.id;
-        },
-    });
-    return result?.[0]?.result;
 }
 
 function parseFidelityCsv(csv) {

@@ -10,7 +10,8 @@ const ACCOUNT_TYPES = {
   "capitalone": "Capital One Credit Card",
   "fidelity": "Fidelity Credit Card",
   "target-credit": "Target Credit Card",
-  "wf-credit": "WF Autograph Card"
+  "wf-credit": "WF Autograph Card",
+  "venmo-credit": "Venmo Credit Card",
 };
 
 function populateDropdown() {
@@ -172,7 +173,8 @@ async function loadActualAccounts() {
 }
 
 function updateSyncBtn() {
-  const hasMapping = !!document.querySelector("select[data-mapping-key]")?.value;
+  const hasMapping = Array.from(document.querySelectorAll("select[data-mapping-key]"))
+      .some(sel => sel.value);
   const syncFromDate = $("sync-from-date").value;
   $("sync-btn").style.display = (hasMapping && syncFromDate) ? "block" : "none";
   if (hasMapping) renderSyncStatus();
@@ -245,6 +247,7 @@ function addAccountRow(type, savedMappings) {
     "fidelity": "fidelity-credit",
     "target-credit": "target-credit",
     "wf-credit": "wf-credit",
+    "venmo-credit": "venmo-credit",
   };
 
   const key = keyMap[type];
@@ -286,18 +289,31 @@ function addMappingRow(mappingKey, label, selectedId) {
   removeBtn.className = "remove-btn";
   removeBtn.textContent = "✕";
   removeBtn.title = "Remove";
-  removeBtn.addEventListener("click", () => {
+  removeBtn.addEventListener("click", async () => {
     row.remove();
     const type = getTypeForKey(mappingKey);
     if (type) addedTypes.delete(type);
     updateDropdownOptions();
     persistAddedTypes();
+
+    const [{ accountMappings = {} }, { lastSyncDates = {} }, { syncErrors = {} }] = await Promise.all([
+      chrome.storage.local.get("accountMappings"),
+      chrome.storage.local.get("lastSyncDates"),
+      chrome.storage.local.get("syncErrors"),
+    ]);
+    delete accountMappings[mappingKey];
+    delete lastSyncDates[mappingKey];
+    delete syncErrors[mappingKey];
+    await chrome.storage.local.set({ accountMappings, lastSyncDates, syncErrors });
+
+    updateSyncBtn();
   });
 
   row.appendChild(leftCol);
   row.appendChild(select);
   row.appendChild(removeBtn);
   $("accounts-list").appendChild(row);
+  updateUsedOptions();
 }
 
 function refreshSelect(select, selectedId) {
@@ -327,6 +343,7 @@ function getTypeForKey(mappingKey) {
   if (mappingKey === "fidelity-credit") return "fidelity"
   if (mappingKey === "target-credit") return "target-credit";
   if (mappingKey === "wf-credit") return "wf-credit";
+  if (mappingKey === "venmo-credit") return "venmo-credit";
   return null;
 }
 
@@ -404,30 +421,24 @@ function setAccountsVisible(visible) {
 }
 
 async function renderSyncStatus() {
-  const { lastSyncDates = {} } = await chrome.storage.local.get("lastSyncDates");
+  const { lastSyncDates = {}, syncErrors = {} } = await chrome.storage.local.get(["lastSyncDates", "syncErrors"]);
 
   for (const el of document.querySelectorAll("[id^='sub-']")) {
     const key = el.id.replace("sub-", "");
-    const date = lastSyncDates[key];
-    el.textContent = date ? `last synced ${formatDate(date)}` : "";
+    if (syncErrors[key]) {
+      el.textContent = syncErrors[key];
+      el.style.color = "#e94560";
+    } else {
+      const date = lastSyncDates[key];
+      el.textContent = date ? `last synced ${formatDate(date)}` : "";
+      el.style.color = "";
+    }
   }
 
   const anyUnsynced = Array.from(document.querySelectorAll("select[data-mapping-key]"))
       .some(sel => sel.value && !lastSyncDates[sel.dataset.mappingKey]);
 
   $("sync-from-section").style.display = anyUnsynced ? "block" : "none";
-
-  const { venmoError } = await chrome.storage.local.get("venmoError");
-  const venmoSub = $("sub-venmo-cash");
-  if (venmoSub && venmoError) {
-    venmoSub.textContent = venmoError;
-    venmoSub.style.color = "#e94560";
-  }
-}
-
-function getSyncDateForKey(key, lastSyncDates) {
-  if (lastSyncDates[key]) return lastSyncDates[key];
-  return null;
 }
 
 function formatDate(isoStr) {

@@ -1,8 +1,9 @@
-import { getDateChunks, isoDate, offsetDate, parseCsvLine, alreadySyncedToday, openTabBackground, waitForTabClose, POLL_TIMEOUT_MS, POLL_INTERVAL_MS } from "../utils.js";
+import { getDateChunks, isoDate, offsetDate, parseCsvLine, alreadySyncedToday, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS } from "../utils.js";
 import { sendToHost } from '../host.js'
 import { updateLastSyncDate } from '../utils.js'
 
-export async function syncSoFi(settings, accountMappings, retried = false) {
+export async function syncSoFi(settings, accountMappings) {
+    console.log("SoFi: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
 
     // Check if all mapped SoFi accounts have already been synced today
@@ -21,16 +22,8 @@ export async function syncSoFi(settings, accountMappings, retried = false) {
     try {
         apolloState = await pollForApolloState(tab.id);
     } catch (err) {
-        if (retried) {
-            console.error("SoFi: login failed after retry, giving up.");
-            chrome.tabs.remove(tab.id);
-            return;
-        }
-        chrome.tabs.update(tab.id, { active: true });
-        chrome.windows.update(tab.windowId, { focused: true });
-        console.log("SoFi: waiting for login...");
-        await waitForTabClose(tab.id);
-        await syncSoFi(settings, accountMappings, true);
+        console.error("SoFi: login failed, giving up.", err.message);
+        chrome.tabs.remove(tab.id);
         return;
     }
 
@@ -153,7 +146,7 @@ async function fetchSoFiCreditTransactions(startDate, endDate) {
         const endISO = new Date(chunkEnd).toISOString().replace(/T.*/, "T05:00:00.000Z");
 
         const url = `https://www.sofi.com/credit-card-servicing/api/public/v1/transactions/export?startDate=${startISO}&endDate=${endISO}`;
-
+        console.log("SoFi Credit: fetching", url);
         const response = await fetch(url, {
             headers: { accept: "text/csv" },
             credentials: "include",
@@ -206,6 +199,7 @@ function parseSoFiCreditCsv(csv) {
 function pollForApolloState(tabId) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
+        let shownToUser = false;
 
         const interval = setInterval(async () => {
             if (Date.now() - start > POLL_TIMEOUT_MS) {
@@ -217,14 +211,18 @@ function pollForApolloState(tabId) {
             try {
                 const tab = await chrome.tabs.get(tabId);
 
-                // If redirected away from banking page, user needs to log in
+                // If redirected away from banking page, show tab to user and keep waiting
                 if (tab.url && !tab.url.includes("sofi.com/my/banking")) {
-                    clearInterval(interval);
-                    chrome.tabs.update(tabId, { active: true });
-                    chrome.windows.update(tab.windowId, { focused: true });
-                    reject(new Error("Redirected to login"));
+                    if (!shownToUser) {
+                        shownToUser = true;
+                        chrome.tabs.update(tabId, { active: true });
+                        chrome.windows.update(tab.windowId, { focused: true });
+                        console.log("SoFi: waiting for login...");
+                    }
                     return;
                 }
+
+                if (tab.status !== "complete") return;
 
                 const results = await chrome.scripting.executeScript({
                     target: { tabId },
@@ -284,7 +282,7 @@ async function fetchSoFiTransactions(accountId, csrfToken, startDate, endDate) {
     const url =
         `https://www.sofi.com/money-transactions-hist-service/api/public/v1/accounts/transactions/export/${accountId}` +
         `?startDate=${startDate}&endDate=${endDate}`;
-
+    console.log("SoFi: fetching", url);
     const response = await fetch(url, {
         headers: {
             accept: "text/csv",
@@ -330,7 +328,7 @@ function parseSoFiCsv(csv, accountId) {
     return transactions;
 }
 
-export async function getSoFiAccountsForPopup(retried = false) {
+export async function getSoFiAccountsForPopup() {
     const tab = await openTabBackground("https://www.sofi.com/my/banking/accounts/");
 
     let apolloState;
@@ -338,12 +336,7 @@ export async function getSoFiAccountsForPopup(retried = false) {
         apolloState = await pollForApolloState(tab.id);
     } catch (err) {
         chrome.tabs.remove(tab.id);
-        if (retried) throw new Error("Timed out waiting for SoFi login");
-        const tab2 = await openTabBackground("https://www.sofi.com/my/banking/accounts/");
-        chrome.tabs.update(tab2.id, { active: true });
-        chrome.windows.update(tab2.windowId, { focused: true });
-        await waitForTabClose(tab2.id);
-        return getSoFiAccountsForPopup(true);
+        throw new Error("Timed out waiting for SoFi login");
     }
 
     chrome.tabs.remove(tab.id);

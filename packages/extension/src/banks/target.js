@@ -1,7 +1,8 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, waitForTabClose, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
+import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncTarget(settings, accountMappings, retried = false) {
+export async function syncTarget(settings, accountMappings) {
+    console.log("Target: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
     const startDate = lastSyncDates["target-credit"] || syncFromDate;
 
@@ -30,16 +31,7 @@ export async function syncTarget(settings, accountMappings, retried = false) {
         targetData = await pollForTargetData(tab.id);
     } catch (err) {
         chrome.tabs.remove(tab.id);
-        if (retried) {
-            console.error("Target: login failed after retry, giving up.");
-            return;
-        }
-        const tab2 = await openTabBackground("https://mytargetcirclecard.target.com/account/transaction-history");
-        chrome.tabs.update(tab2.id, { active: true });
-        chrome.windows.update(tab2.windowId, { focused: true });
-        console.log("Target: waiting for login...");
-        await waitForTabClose(tab2.id);
-        await syncTarget(settings, accountMappings, true);
+        console.error("Target: login failed, giving up.");
         return;
     }
 
@@ -82,17 +74,24 @@ export async function syncTarget(settings, accountMappings, retried = false) {
 
 function pollForTargetData(tabId) {
     return new Promise((resolve, reject) => {
-        const start = Date.now();
+        let dataPageStart = null;
 
         const interval = setInterval(async () => {
-            if (Date.now() - start > POLL_TIMEOUT_MS) {
-                clearInterval(interval);
-                reject(new Error("Timed out waiting for Target data"));
-                return;
-            }
-
             try {
                 const tab = await chrome.tabs.get(tabId);
+
+                if (!tab.url?.includes("mytargetcirclecard.target.com")) {
+                    dataPageStart = null;
+                    return;
+                }
+
+                if (!dataPageStart) dataPageStart = Date.now();
+                if (Date.now() - dataPageStart > POLL_TIMEOUT_MS) {
+                    clearInterval(interval);
+                    reject(new Error("Timed out waiting for Target data"));
+                    return;
+                }
+
                 if (tab.status === "complete" && tab.url?.includes("mytargetcirclecard.target.com/home")) {
                     chrome.tabs.update(tabId, { url: "https://mytargetcirclecard.target.com/account/transaction-history" });
                     return;
