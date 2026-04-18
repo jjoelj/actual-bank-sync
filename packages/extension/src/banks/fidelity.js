@@ -135,7 +135,7 @@ function pollForFidelityData(tabId) {
                             world: "MAIN",
                             func: () => {
                                 const link = Array.from(document.querySelectorAll("a"))
-                                    .find(l => l.textContent.includes("Download transactions"));
+                                    .find(l => l.textContent.includes("Download transactions") && l.closest(".dwnld-btn-desktop"));
                                 link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
                             },
                         });
