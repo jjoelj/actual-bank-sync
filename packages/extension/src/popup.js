@@ -1,23 +1,13 @@
 // popup.js
 
-const $ = (id) => document.getElementById(id);
+import { ACCOUNT_TYPES } from "./accounts.js";
 
-const ACCOUNT_TYPES = {
-  "sofi-banking": "SoFi Banking",
-  "sofi-credit": "SoFi Credit Card",
-  "bilt": "BILT Credit Card",
-  "venmo": "Venmo Cash",
-  "capitalone": "Capital One Credit Card",
-  "fidelity": "Fidelity Credit Card",
-  "target-credit": "Target Credit Card",
-  "wf-credit": "WF Autograph Card",
-  "venmo-credit": "Venmo Credit Card",
-};
+const $ = (id) => document.getElementById(id);
 
 function populateDropdown() {
   const dropdown = $("account-type-dropdown");
   dropdown.innerHTML = "";
-  for (const [type, label] of Object.entries(ACCOUNT_TYPES)) {
+  for (const [type, { label }] of Object.entries(ACCOUNT_TYPES)) {
     const div = document.createElement("div");
     div.className = "dropdown-option";
     div.dataset.type = type;
@@ -33,7 +23,29 @@ let addedTypes = new Set(); // tracks which types have been added
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
+function isValidKey(key) {
+  return key in ACCOUNT_TYPES || key.startsWith("sofi-");
+}
+
+async function purgeStaleKeys() {
+  const { accountMappings = {}, lastSyncDates = {}, syncErrors = {}, addedAccountTypes = [] } =
+    await chrome.storage.local.get(["accountMappings", "lastSyncDates", "syncErrors", "addedAccountTypes"]);
+
+  const cleanMappings = Object.fromEntries(Object.entries(accountMappings).filter(([k]) => isValidKey(k)));
+  const cleanDates    = Object.fromEntries(Object.entries(lastSyncDates).filter(([k]) => isValidKey(k)));
+  const cleanErrors   = Object.fromEntries(Object.entries(syncErrors).filter(([k]) => isValidKey(k)));
+  const cleanTypes    = addedAccountTypes.filter(t => t in ACCOUNT_TYPES);
+
+  await chrome.storage.local.set({
+    accountMappings: cleanMappings,
+    lastSyncDates:   cleanDates,
+    syncErrors:      cleanErrors,
+    addedAccountTypes: cleanTypes,
+  });
+}
+
 async function init() {
+  await purgeStaleKeys();
   const settings = await chrome.storage.sync.get([
     "actualUrl",
     "actualPassword",
@@ -184,11 +196,15 @@ function updateSyncBtn() {
 
 $("add-account-btn").addEventListener("click", (e) => {
   e.stopPropagation();
-  $("account-type-dropdown").classList.toggle("open");
+  const dropdown = $("account-type-dropdown");
+  const opening = !dropdown.classList.contains("open");
+  dropdown.classList.toggle("open");
+  $("accounts-section").style.paddingBottom = opening ? `${dropdown.offsetHeight + 4}px` : "";
 });
 
 document.addEventListener("click", () => {
   $("account-type-dropdown").classList.remove("open");
+  $("accounts-section").style.paddingBottom = "";
 });
 
 $("account-type-dropdown").addEventListener("click", async (e) => {
@@ -238,21 +254,8 @@ function addSoFiBankingRows(bankAccounts, savedMappings) {
 
 function addAccountRow(type, savedMappings) {
   addedTypes.add(type);
-
-  const keyMap = {
-    "sofi-credit": "sofi-credit",
-    "bilt": "bilt-credit",
-    "venmo": "venmo-cash",
-    "capitalone": "capitalone-credit",
-    "fidelity": "fidelity-credit",
-    "target-credit": "target-credit",
-    "wf-credit": "wf-credit",
-    "venmo-credit": "venmo-credit",
-  };
-
-  const key = keyMap[type];
-  const label = ACCOUNT_TYPES[type];
-  addMappingRow(key, label, savedMappings[key]);
+  const { label } = ACCOUNT_TYPES[type];
+  addMappingRow(type, label, savedMappings[type]);
 }
 
 function addMappingRow(mappingKey, label, selectedId) {
@@ -335,25 +338,19 @@ function refreshSelect(select, selectedId) {
 }
 
 function getTypeForKey(mappingKey) {
-  if (mappingKey.startsWith("sofi-1")) return "sofi-banking"; // account ID keys
-  if (mappingKey === "sofi-credit") return "sofi-credit";
-  if (mappingKey === "bilt-credit") return "bilt";
-  if (mappingKey === "venmo-cash") return "venmo";
-  if (mappingKey === "capitalone-credit") return "capitalone";
-  if (mappingKey === "fidelity-credit") return "fidelity"
-  if (mappingKey === "target-credit") return "target-credit";
-  if (mappingKey === "wf-credit") return "wf-credit";
-  if (mappingKey === "venmo-credit") return "venmo-credit";
-  return null;
+  if (mappingKey.startsWith("sofi-") && mappingKey !== "sofi-credit") return "sofi-banking";
+  return ACCOUNT_TYPES[mappingKey] ? mappingKey : null;
 }
 
 function updateDropdownOptions() {
+  let anyVisible = false;
   for (const option of document.querySelectorAll(".dropdown-option")) {
     const type = option.dataset.type;
-    const isAdded = addedTypes.has(type);
-    option.classList.toggle("disabled", isAdded);
-    option.textContent = ACCOUNT_TYPES[type] + (isAdded ? " ✓" : "");
+    const hidden = addedTypes.has(type);
+    option.style.display = hidden ? "none" : "";
+    if (!hidden) anyVisible = true;
   }
+  $("add-account-btn").style.display = anyVisible ? "" : "none";
 }
 
 function persistAddedTypes() {

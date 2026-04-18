@@ -2,26 +2,26 @@ import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLin
 import { sendToHost } from '../host.js'
 import { updateLastSyncDate } from '../utils.js'
 
-export async function syncBilt(settings, accountMappings) {
+export async function syncBilt(settings, accountMappings, accountKey) {
     console.log("Bilt: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates["bilt-credit"] || syncFromDate;
+    const startDate = lastSyncDates[accountKey] || syncFromDate;
 
     if (!startDate) {
-        console.warn("SoFi: no sync start date configured, skipping.");
+        console.warn("Bilt: no sync start date configured, skipping.");
         return;
     }
 
     const today = offsetDate(isoDate(new Date()), -1);
 
-    if (alreadySyncedToday(lastSyncDates, "bilt-credit")) {
+    if (alreadySyncedToday(lastSyncDates, accountKey)) {
         console.log("Bilt: already synced today, skipping.");
         return;
     }
 
     console.log(`Bilt sync: ${startDate} → ${today}`);
 
-    const actualAccountId = accountMappings["bilt-credit"];
+    const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
 
     const tab = await openTabBackground("https://www.bilt.com/wallet");
@@ -65,7 +65,7 @@ export async function syncBilt(settings, accountMappings) {
         console.log("Bilt: no new transactions.");
     }
 
-    await updateLastSyncDate("bilt-credit", today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 function pollForBiltData(tabId) {

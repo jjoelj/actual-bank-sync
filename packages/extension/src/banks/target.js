@@ -1,17 +1,17 @@
 import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncTarget(settings, accountMappings) {
+export async function syncTarget(settings, accountMappings, accountKey) {
     console.log("Target: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates["target-credit"] || syncFromDate;
+    const startDate = lastSyncDates[accountKey] || syncFromDate;
 
     if (!startDate) {
         console.warn("Target: no sync start date configured, skipping.");
         return;
     }
 
-    if (alreadySyncedToday(lastSyncDates, "target-credit")) {
+    if (alreadySyncedToday(lastSyncDates, accountKey)) {
         console.log("Target: already synced today, skipping.");
         return;
     }
@@ -19,7 +19,7 @@ export async function syncTarget(settings, accountMappings) {
     const today = offsetDate(isoDate(new Date()), -1);
     console.log(`Target sync: ${startDate} → ${today}`);
 
-    const actualAccountId = accountMappings["target-credit"];
+    const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
 
     const tab = await openTabBackground("https://mytargetcirclecard.target.com/account/transaction-history");
@@ -69,7 +69,7 @@ export async function syncTarget(settings, accountMappings) {
         console.error("Target import failed:", err.message);
     }
 
-    await updateLastSyncDate("target-credit", today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 function pollForTargetData(tabId) {

@@ -8,3 +8,4 @@ packages/host/src/*-launcher.bat
 
 # IDE
 .idea/
+/.claude/settings.local.json

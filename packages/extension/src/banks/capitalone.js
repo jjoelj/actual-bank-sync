@@ -2,17 +2,17 @@ import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLin
 import { sendToHost } from "../host.js";
 import { updateLastSyncDate } from "../utils.js"
 
-export async function syncCapitalOne(settings, accountMappings) {
+export async function syncCapitalOne(settings, accountMappings, accountKey) {
     console.log("Capital One: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates["capitalone-credit"] || syncFromDate;
+    const startDate = lastSyncDates[accountKey] || syncFromDate;
 
     if (!startDate) {
         console.warn("Capital One: no sync start date configured, skipping.");
         return;
     }
 
-    if (alreadySyncedToday(lastSyncDates, "capitalone-credit")) {
+    if (alreadySyncedToday(lastSyncDates, accountKey)) {
         console.log("Capital One: already synced today, skipping.");
         return;
     }
@@ -20,7 +20,7 @@ export async function syncCapitalOne(settings, accountMappings) {
     const today = offsetDate(isoDate(new Date()), -1);
     console.log(`Capital One sync: ${startDate} → ${today}`);
 
-    const actualAccountId = accountMappings["capitalone-credit"];
+    const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
 
     const tab = await openTabBackground("https://myaccounts.capitalone.com/accountSummary");
@@ -53,7 +53,7 @@ export async function syncCapitalOne(settings, accountMappings) {
         console.error("Capital One failed:", err.message);
     }
 
-    await updateLastSyncDate("capitalone-credit", today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 function pollForCapitalOneData(tabId) {

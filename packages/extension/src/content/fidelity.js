@@ -54,41 +54,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return true;
     }
 
-    if (msg.type === "GET_FIDELITY_SSO_LINK") {
-        const { last4 } = msg;
-
-        fetch("https://digital.fidelity.com/ftgw/digital/credit-card/api/graphql", {
-            method: "POST",
-            headers: {
-                accept: "*/*",
-                "content-type": "application/json",
-                "apollographql-client-name": "credit-card",
-                "apollographql-client-version": "0.0.1",
-            },
-            credentials: "include",
-            body: JSON.stringify({
-                operationName: "ssoLink",
-                variables: {
-                    channelCode: "WEB",
-                    selectedDestination: "downloadTrans",
-                    fvCreditCardNum: last4,
-                },
-                query: `query ssoLink($channelCode: String, $selectedDestination: String, $fvCreditCardNum: String, $destinationdatacontext: DestinationDataContext) {
-                          ssoLink(channelCode: $channelCode selectedDestination: $selectedDestination fvCreditCardNum: $fvCreditCardNum destinationdatacontext: $destinationdatacontext) {
-                            links { link { uri title rel __typename } __typename }
-                            ssoToken entityId destination __typename
-                          }
-                        }`,
-            }),
-        })
-            .then(r => r.json())
-            .then(data => {
-                const uri = data?.data?.ssoLink?.links?.[0]?.link?.uri;
-                const url = uri?.startsWith("http") ? uri : `https://digital.fidelity.com${uri}`;
-                sendResponse({ url });
-            })
-            .catch(err => sendResponse({ error: err.message }));
-
-        return true;
-    }
 });

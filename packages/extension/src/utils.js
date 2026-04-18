@@ -59,11 +59,11 @@ export function alreadySyncedToday(lastSyncDates, key) {
 
 export function openTabBackground(url) {
     return new Promise((resolve, reject) => {
-        chrome.tabs.create({ url, active: false }, (tab) => {
+        chrome.windows.create({ url, type: "normal", width: 1200, height: 800 }, (win) => {
             if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
             } else {
-                resolve(tab);
+                resolve(win.tabs[0]);
             }
         });
     });

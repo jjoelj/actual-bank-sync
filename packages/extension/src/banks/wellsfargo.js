@@ -1,17 +1,17 @@
 import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncWellsFargo(settings, accountMappings) {
+export async function syncWellsFargo(settings, accountMappings, accountKey) {
     console.log("Wells Fargo: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates["wf-credit"] || syncFromDate;
+    const startDate = lastSyncDates[accountKey] || syncFromDate;
 
     if (!startDate) {
         console.warn("WF: no sync start date configured, skipping.");
         return;
     }
 
-    if (alreadySyncedToday(lastSyncDates, "wf-credit")) {
+    if (alreadySyncedToday(lastSyncDates, accountKey)) {
         console.log("WF: already synced today, skipping.");
         return;
     }
@@ -19,7 +19,7 @@ export async function syncWellsFargo(settings, accountMappings) {
     const today = offsetDate(isoDate(new Date()), -1);
     console.log(`WF sync: ${startDate} → ${today}`);
 
-    const actualAccountId = accountMappings["wf-credit"];
+    const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
 
     const tab = await openTabBackground("https://www.wellsfargo.com/");
@@ -75,7 +75,7 @@ export async function syncWellsFargo(settings, accountMappings) {
         console.error("WF import failed:", err.message);
     }
 
-    await updateLastSyncDate("wf-credit", today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 function pollForWFData(tabId) {

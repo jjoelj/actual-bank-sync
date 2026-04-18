@@ -1,17 +1,17 @@
 import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncFidelity(settings, accountMappings) {
+export async function syncFidelity(settings, accountMappings, accountKey) {
     console.log("Fidelity: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates["fidelity-credit"] || syncFromDate;
+    const startDate = lastSyncDates[accountKey] || syncFromDate;
 
     if (!startDate) {
         console.warn("Fidelity: no sync start date configured, skipping.");
         return;
     }
 
-    if (alreadySyncedToday(lastSyncDates, "fidelity-credit")) {
+    if (alreadySyncedToday(lastSyncDates, accountKey)) {
         console.log("Fidelity: already synced today, skipping.");
         return;
     }
@@ -19,7 +19,7 @@ export async function syncFidelity(settings, accountMappings) {
     const today = offsetDate(isoDate(new Date()), -1);
     console.log(`Fidelity sync: ${startDate} → ${today}`);
 
-    const actualAccountId = accountMappings["fidelity-credit"];
+    const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
 
     const tab = await openTabBackground("https://digital.fidelity.com/ftgw/digital/portfolio/summary");
@@ -70,14 +70,14 @@ export async function syncFidelity(settings, accountMappings) {
         console.error("Fidelity import failed:", err.message);
     }
 
-    await updateLastSyncDate("fidelity-credit", today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 function pollForFidelityData(tabId) {
     return new Promise((resolve, reject) => {
         let dataPageStart = null;
         let trackingTabId = tabId;
-        let clickedDownload = false;
+        let listenerRegistered = false;
         let fidelityState = "click-card";
 
         const interval = setInterval(async () => {
@@ -111,35 +111,34 @@ function pollForFidelityData(tabId) {
                         },
                     });
                     if (clicked?.[0]?.result) fidelityState = "click-download";
-                } else if (fidelityState === "click-download" && tab.url?.includes("digital.fidelity.com")) {
-                    if (!clickedDownload) {
-                        clickedDownload = true;
-
-                        chrome.tabs.onCreated.addListener(function createdListener(newTab) {
+                } else if ((fidelityState === "click-download" || fidelityState === "await-redirect") && tab.url?.includes("digital.fidelity.com")) {
+                    if (fidelityState === "await-redirect") return;
+                    if (!listenerRegistered) {
+                        listenerRegistered = true;
+                        chrome.tabs.onCreated.addListener(function createdListener() {
                             chrome.tabs.onCreated.removeListener(createdListener);
-
-                            chrome.tabs.onUpdated.addListener(function updatedListener(updatedTabId, changeInfo) {
-                                if (updatedTabId !== newTab.id) return;
-                                if (changeInfo.url?.includes("fidelityrewards.com")) {
-                                    chrome.tabs.onUpdated.removeListener(updatedListener);
-                                    const url = changeInfo.url;
-                                    chrome.tabs.update(trackingTabId, { url });
-                                    chrome.tabs.remove(newTab.id);
-                                    fidelityState = "get-data";
-                                }
-                            });
+                            fidelityState = "await-redirect";
                         });
+                        chrome.tabs.onUpdated.addListener(function ssoListener(updatedTabId, changeInfo) {
+                            if (!changeInfo.url?.includes("fidelityrewards.com")) return;
+                            chrome.tabs.onUpdated.removeListener(ssoListener);
+                            fidelityState = "get-data";
+                            const url = changeInfo.url;
+                            chrome.tabs.update(trackingTabId, { url });
+                            if (updatedTabId !== trackingTabId) chrome.tabs.remove(updatedTabId);
+                        });
+                    }
 
-                        await chrome.scripting.executeScript({
+                    await chrome.scripting.executeScript({
                             target: { tabId: trackingTabId },
                             world: "MAIN",
                             func: () => {
                                 const link = Array.from(document.querySelectorAll("a"))
                                     .find(l => l.textContent.includes("Download transactions") && l.closest(".dwnld-btn-desktop"));
+                                link?.scrollIntoView();
                                 link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
                             },
                         });
-                    }
                 } else if (fidelityState === "get-data" && tab.url?.includes("login.fidelityrewards.com/digital/servicing")) {
                     const result = await chrome.tabs.sendMessage(tabId, { type: "GET_FIDELITY_DATA" });
                     if (result?.accessToken && result?.accountToken) {

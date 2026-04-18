@@ -6,6 +6,15 @@ import { syncFidelity } from "./banks/fidelity.js";
 import { syncTarget } from "./banks/target.js";
 import { syncWellsFargo } from "./banks/wellsfargo.js";
 import { sendToHost } from "./host.js";
+import { ACCOUNT_TYPES } from "./accounts.js";
+
+const SINGLE_ACCOUNT_SYNC = {
+  bilt:       syncBilt,
+  capitalone: syncCapitalOne,
+  fidelity:   syncFidelity,
+  target:     syncTarget,
+  wf:         syncWellsFargo,
+};
 
 // background.js - service worker
 // Handles daily alarms and orchestrates sync for each bank
@@ -62,13 +71,13 @@ async function runSync() {
     return;
   }
 
-  if (accountMappings["sofi-credit"] || Object.keys(accountMappings).some(k => k.startsWith("sofi-"))) await syncSoFi(settings, accountMappings);
-  if (accountMappings["venmo-cash"] || accountMappings["venmo-credit"]) await syncVenmo(settings, accountMappings);
-  if (accountMappings["bilt-credit"]) await syncBilt(settings, accountMappings);
-  if (accountMappings["capitalone-credit"]) await syncCapitalOne(settings, accountMappings);
-  if (accountMappings["fidelity-credit"]) await syncFidelity(settings, accountMappings);
-  if (accountMappings["target-credit"]) await syncTarget(settings, accountMappings);
-  if (accountMappings["wf-credit"]) await syncWellsFargo(settings, accountMappings);
+  const keys = Object.keys(accountMappings);
+  if (keys.some(k => k.startsWith("sofi-"))) await syncSoFi(settings, accountMappings);
+  if (keys.some(k => ACCOUNT_TYPES[k]?.bank === "venmo")) await syncVenmo(settings, accountMappings);
+  for (const key of keys) {
+    const syncFn = SINGLE_ACCOUNT_SYNC[ACCOUNT_TYPES[key]?.bank];
+    if (syncFn) await syncFn(settings, accountMappings, key);
+  }
 
   await chrome.storage.local.set({ lastSyncTime: Date.now() });
   console.log("Sync complete.");

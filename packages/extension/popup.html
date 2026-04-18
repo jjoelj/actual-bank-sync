@@ -10,17 +10,17 @@
       width: 380px;
       font-family: system-ui, sans-serif;
       font-size: 13px;
-      background: #1a1a2e;
-      color: #e0e0e0;
+      background: #080811;
+      color: #d9e2ec;
     }
 
     header {
-      background: #16213e;
+      background: #102a43;
       padding: 8px 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #0f3460;
+      border-bottom: 1px solid #486581;
       flex-wrap: wrap;
       gap: 4px;
     }
@@ -28,12 +28,12 @@
     header h1 {
       font-size: 14px;
       font-weight: 600;
-      color: #e94560;
+      color: #d9e2ec;
       letter-spacing: 0.5px;
     }
 
     #sync-btn {
-      background: #e94560;
+      background: #9446ed;
       color: white;
       border: none;
       border-radius: 4px;
@@ -43,12 +43,12 @@
       font-weight: 600;
     }
 
-    #sync-btn:hover { background: #c73652; }
-    #sync-btn:disabled { background: #555; cursor: not-allowed; }
+    #sync-btn:hover { background: #7a0ecc; }
+    #sync-btn:disabled { background: #334e68; cursor: not-allowed; }
 
     section {
       padding: 8px 12px;
-      border-bottom: 1px solid #0f3460;
+      border-bottom: 1px solid #243b53;
     }
 
     section h2 {
@@ -56,14 +56,14 @@
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 1px;
-      color: #888;
+      color: #9fb3c8;
       margin-bottom: 6px;
     }
 
     label {
       display: block;
       margin-bottom: 6px;
-      color: #aaa;
+      color: #9fb3c8;
       font-size: 11px;
     }
 
@@ -71,29 +71,29 @@
       display: block;
       width: 100%;
       margin-top: 3px;
-      background: #0f3460;
-      border: 1px solid #1a4a80;
+      background: #243b53;
+      border: 1px solid #486581;
       border-radius: 4px;
-      color: #e0e0e0;
+      color: #d9e2ec;
       padding: 5px 8px;
       font-size: 12px;
       outline: none;
     }
 
-    input:focus { border-color: #e94560; }
+    input:focus { border-color: #9446ed; }
 
     #save-settings-btn {
       margin-top: 10px;
-      background: #0f3460;
-      color: #e0e0e0;
-      border: 1px solid #1a4a80;
+      background: #243b53;
+      color: #d9e2ec;
+      border: 1px solid #486581;
       border-radius: 4px;
       padding: 5px 12px;
       cursor: pointer;
       font-size: 12px;
     }
 
-    #save-settings-btn:hover { background: #1a4a80; }
+    #save-settings-btn:hover { background: #334e68; }
 
     /* Account rows */
     .account-row {
@@ -105,7 +105,7 @@
 
     .account-label {
       flex: 1;
-      color: #ccc;
+      color: #d9e2ec;
       font-size: 12px;
       white-space: nowrap;
       overflow: hidden;
@@ -114,28 +114,28 @@
 
     select {
       flex: 1;
-      background: #0f3460;
-      border: 1px solid #1a4a80;
+      background: #243b53;
+      border: 1px solid #486581;
       border-radius: 4px;
-      color: #e0e0e0;
+      color: #d9e2ec;
       padding: 4px 6px;
       font-size: 12px;
       outline: none;
     }
 
-    select:focus { border-color: #e94560; }
+    select:focus { border-color: #9446ed; }
 
     .remove-btn {
       background: transparent;
       border: none;
-      color: #555;
+      color: #627d98;
       cursor: pointer;
       font-size: 14px;
       padding: 0 2px;
       line-height: 1;
     }
 
-    .remove-btn:hover { color: #e94560; }
+    .remove-btn:hover { color: #f86a6a; }
 
     /* Add account area */
     #add-account-area {
@@ -148,8 +148,8 @@
 
     #add-account-btn {
       background: transparent;
-      border: 1px dashed #444;
-      color: #888;
+      border: 1px dashed #486581;
+      color: #9fb3c8;
       border-radius: 4px;
       padding: 5px 12px;
       cursor: pointer;
@@ -159,17 +159,17 @@
     }
 
     #add-account-btn:hover {
-      border-color: #e94560;
-      color: #e94560;
+      border-color: #9446ed;
+      color: #d9e2ec;
     }
 
     #account-type-dropdown {
       position: absolute;
-      bottom: 100%;
+      top: 100%;
       left: 0;
       right: 0;
-      background: #16213e;
-      border: 1px solid #0f3460;
+      background: #141520;
+      border: 1px solid #243b53;
       border-radius: 4px;
       z-index: 10;
       margin-top: 2px;
@@ -177,7 +177,7 @@
       max-height: 150px;
       overflow-y: auto;
       scrollbar-width: thin;
-      scrollbar-color: #e94560 #0f3460;
+      scrollbar-color: #9446ed #243b53;
     }
 
     #account-type-dropdown::-webkit-scrollbar {
@@ -185,12 +185,12 @@
     }
 
     #account-type-dropdown::-webkit-scrollbar-track {
-      background: #0f3460;
+      background: #243b53;
       border-radius: 4px;
     }
 
     #account-type-dropdown::-webkit-scrollbar-thumb {
-      background: #e94560;
+      background: #9446ed;
       border-radius: 4px;
     }
 
@@ -204,26 +204,15 @@
       padding: 8px 12px;
       cursor: pointer;
       font-size: 12px;
-      color: #ccc;
+      color: #d9e2ec;
     }
 
     .dropdown-option:hover {
-      background: #0f3460;
-      color: #e0e0e0;
-    }
-
-    .dropdown-option.disabled {
-      color: #666;
-      cursor: not-allowed;
-    }
-
-    .dropdown-option.disabled:hover {
-      background: transparent;
-      color: #666;
+      background: #243b53;
     }
 
     option:disabled {
-      color: #666;
+      color: #627d98;
     }
 
     #accounts-list {
@@ -231,9 +220,9 @@
     }
 
     #save-mappings-btn {
-      background: #0f3460;
-      color: #e0e0e0;
-      border: 1px solid #1a4a80;
+      background: #243b53;
+      color: #d9e2ec;
+      border: 1px solid #486581;
       border-radius: 4px;
       padding: 5px 12px;
       cursor: pointer;
@@ -241,22 +230,22 @@
       display: none;
     }
 
-    #save-mappings-btn:hover { background: #1a4a80; }
+    #save-mappings-btn:hover { background: #334e68; }
 
     #status {
       font-size: 11px;
-      color: #888;
+      color: #9fb3c8;
       flex-basis: 100%;
     }
 
-    #status.error { color: #e94560; }
-    #status.ok { color: #4caf50; }
+    #status.error { color: #f86a6a; }
+    #status.ok { color: #27ab83; }
 
-    .empty-msg { color: #555; font-style: italic; font-size: 12px; }
+    .empty-msg { color: #627d98; font-style: italic; font-size: 12px; }
 
     .account-sub {
       font-size: 10px;
-      color: #4caf50;
+      color: #27ab83;
       margin-top: 1px;
     }
   </style>
@@ -319,6 +308,6 @@
   </div>
 </section>
 
-<script src="src/popup.js"></script>
+<script type="module" src="src/popup.js"></script>
 </body>
 </html>
