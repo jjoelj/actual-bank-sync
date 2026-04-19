@@ -609,12 +609,14 @@ function sortAccountRows(lastSyncMetrics) {
 async function renderSyncSummary() {
   const {
     accountMappings = {},
-    lastCompletedSyncSummary = null,
+    lastSyncDates = {},
+    lastSyncMetrics = {},
     activeSyncSummary = null,
     nextScheduledSyncAt = null,
   } = await chrome.storage.local.get([
     "accountMappings",
-    "lastCompletedSyncSummary",
+    "lastSyncDates",
+    "lastSyncMetrics",
     "activeSyncSummary",
     "nextScheduledSyncAt",
   ]);
@@ -632,18 +634,31 @@ async function renderSyncSummary() {
     : "Auto sync not scheduled";
 
   const liveSummary = activeSyncSummary?.sessionId && (activeSyncSummary.syncedAccounts || activeSyncSummary.transactionCount) ? activeSyncSummary : null;
-  const summary = liveSummary || lastCompletedSyncSummary;
 
-  if (summary && (summary.syncedAccounts || summary.transactionCount || summary.inflow || summary.outflow)) {
-    $("summary-accounts").textContent = liveSummary
-      ? `${summary.syncedAccounts || 0} accounts done`
-      : `${summary.syncedAccounts || 0} accounts synced`;
-    $("summary-transactions").textContent = `${summary.transactionCount || 0} transactions added`;
-    $("summary-cashflow").innerHTML = formatCashflowSummary(summary.inflow || 0, summary.outflow || 0);
+  if (liveSummary) {
+    $("summary-accounts").textContent = `${liveSummary.syncedAccounts || 0} accounts done`;
+    $("summary-transactions").textContent = `${liveSummary.transactionCount || 0} transactions added`;
+    $("summary-cashflow").innerHTML = formatCashflowSummary(liveSummary.inflow || 0, liveSummary.outflow || 0);
   } else {
-    $("summary-accounts").textContent = `${mappedKeys.length} mapped`;
-    $("summary-transactions").textContent = "No recent sync run";
-    $("summary-cashflow").innerHTML = "";
+    const syncedAccounts = mappedKeys.filter(k => lastSyncDates[k]).length;
+    if (syncedAccounts > 0) {
+      const totals = mappedKeys.reduce((acc, k) => {
+        const m = lastSyncMetrics[k];
+        if (!m) return acc;
+        return {
+          transactionCount: acc.transactionCount + (m.count || 0),
+          inflow: acc.inflow + (m.inflow || 0),
+          outflow: acc.outflow + (m.outflow || 0),
+        };
+      }, { transactionCount: 0, inflow: 0, outflow: 0 });
+      $("summary-accounts").textContent = `${syncedAccounts} accounts synced`;
+      $("summary-transactions").textContent = `${totals.transactionCount} transactions added`;
+      $("summary-cashflow").innerHTML = formatCashflowSummary(totals.inflow, totals.outflow);
+    } else {
+      $("summary-accounts").textContent = `${mappedKeys.length} mapped`;
+      $("summary-transactions").textContent = "No recent sync run";
+      $("summary-cashflow").innerHTML = "";
+    }
   }
   summaryEl.style.display = "grid";
 }

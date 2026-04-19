@@ -163,6 +163,9 @@ export async function updateLastSyncMetrics(key, transactions) {
     if (transactions.length > 0) {
         lastSyncMetrics[key] = metrics;
         updates.lastSyncMetrics = lastSyncMetrics;
+    } else if (!lastSyncMetrics[key]) {
+        lastSyncMetrics[key] = metrics;
+        updates.lastSyncMetrics = lastSyncMetrics;
     }
     if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
 }

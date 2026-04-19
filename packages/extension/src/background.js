@@ -120,15 +120,17 @@ async function runSync(options = {}) {
     }
   }
 
-  const { lastSyncMetrics = {} } = await chrome.storage.local.get("lastSyncMetrics");
-  const metricValues = Object.values(lastSyncMetrics);
-  const newSummary = metricValues.length > 0
+  const { lastSyncMetrics = {}, lastSyncDates = {} } = await chrome.storage.local.get(["lastSyncMetrics", "lastSyncDates"]);
+  const mappedKeys = Object.keys(accountMappings);
+  const syncedAccounts = mappedKeys.filter(k => lastSyncDates[k]).length;
+  const metricValues = mappedKeys.map(k => lastSyncMetrics[k]).filter(Boolean);
+  const newSummary = syncedAccounts > 0
     ? metricValues.reduce((acc, m) => ({
-        syncedAccounts: acc.syncedAccounts + 1,
+        ...acc,
         transactionCount: acc.transactionCount + (m.count || 0),
         inflow: acc.inflow + (m.inflow || 0),
         outflow: acc.outflow + (m.outflow || 0),
-      }), { syncedAccounts: 0, transactionCount: 0, inflow: 0, outflow: 0 })
+      }), { syncedAccounts, transactionCount: 0, inflow: 0, outflow: 0 })
     : undefined;
   await chrome.storage.local.set({
     lastSyncTime: Date.now(),
