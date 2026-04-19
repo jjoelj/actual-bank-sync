@@ -1,14 +1,14 @@
-import { getDateChunks, isoDate, offsetDate, parseCsvLine, alreadySyncedToday, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS } from "../utils.js";
-import { sendToHost } from '../host.js'
-import { updateLastSyncDate } from '../utils.js'
+import { getDateChunks, getSyncPlan, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
+import { sendToHost } from '../host.js';
 
-export async function syncSoFi(settings, accountMappings) {
+export async function syncSoFi(settings, accountMappings, options = {}) {
     console.log("SoFi: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
 
     // Check if all mapped SoFi accounts have already been synced today
     const sofiKeys = Object.keys(accountMappings).filter(k => k.startsWith("sofi-"));
-    const allSyncedToday = sofiKeys.length > 0 && sofiKeys.every(k => alreadySyncedToday(lastSyncDates, k));
+    const plans = Object.fromEntries(sofiKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, options)]));
+    const allSyncedToday = sofiKeys.length > 0 && sofiKeys.every(k => !plans[k]?.shouldSync);
 
     if (allSyncedToday) {
         console.log("SoFi: all accounts already synced today, skipping.");
@@ -16,11 +16,15 @@ export async function syncSoFi(settings, accountMappings) {
     }
 
     // Open SoFi tab in background, wait for Apollo state
+    const activeKeys = sofiKeys.filter(k => plans[k]?.shouldSync);
     const tab = await openTabBackground("https://www.sofi.com/my/banking/accounts/");
+    activeKeys.forEach(k => reportProgress(options, k, 15, "Opening SoFi…"));
 
     let apolloState;
     try {
-        apolloState = await pollForApolloState(tab.id);
+        apolloState = await pollForApolloState(tab.id, (t) => {
+            activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 30), "Logging in…"));
+        });
     } catch (err) {
         console.error("SoFi: login failed, giving up.", err.message);
         chrome.tabs.remove(tab.id);
@@ -35,6 +39,8 @@ export async function syncSoFi(settings, accountMappings) {
         chrome.tabs.remove(tab.id);
         return;
     }
+
+    activeKeys.forEach(k => reportProgress(options, k, 47, "Getting account data…"));
 
     // Get CSRF token from content script
     let csrfToken;
@@ -53,24 +59,21 @@ export async function syncSoFi(settings, accountMappings) {
         const mappingKey = `sofi-${account.id}`;
         const actualAccountId = accountMappings[mappingKey];
         if (!actualAccountId) continue;
-
-        const startDate = lastSyncDates[mappingKey] || syncFromDate;
-
-        if (!startDate) {
+        const plan = plans[mappingKey];
+        if (!plan) {
             console.warn(`SoFi ${account.id}: no sync start date configured, skipping.`);
-            return;
+            continue;
         }
-
-        if (alreadySyncedToday(lastSyncDates, mappingKey)) {
+        if (!plan.shouldSync) {
             console.log(`SoFi ${account.id}: already synced today, skipping.`);
             continue;
         }
-
-        const today = offsetDate(isoDate(new Date()), -1);
+        const { startDate, endDate: today, isForced } = plan;
 
         console.log(`SoFi ${account.id} sync: ${startDate} → ${today}`);
 
         try {
+            reportProgress(options, mappingKey, 55, "Fetching transactions");
             const transactions = await fetchSoFiTransactions(
                 account.id,
                 csrfToken,
@@ -78,13 +81,17 @@ export async function syncSoFi(settings, accountMappings) {
                 today
             );
 
-            await updateLastSyncDate(mappingKey, today);
+            if (!isForced) await updateLastSyncDate(mappingKey, today);
+            await updateLastSyncCount(mappingKey, transactions.length);
+            await updateLastSyncMetrics(mappingKey, transactions);
 
             if (transactions.length === 0) {
+                reportProgress(options, mappingKey, 100, "No new transactions");
                 console.log(`SoFi ${account.id}: no new transactions.`);
                 continue;
             }
 
+            reportProgress(options, mappingKey, 80, `Importing ${transactions.length} transactions`);
             console.log(`SoFi ${account.id}: importing ${transactions.length} transactions.`);
 
             await sendToHost("importTransactions", {
@@ -92,6 +99,7 @@ export async function syncSoFi(settings, accountMappings) {
                 accountId: actualAccountId,
                 transactions,
             });
+            reportProgress(options, mappingKey, 100, `Imported ${transactions.length}`);
         } catch (err) {
             console.error(`SoFi account ${account.id} failed:`, err.message);
         }
@@ -100,25 +108,24 @@ export async function syncSoFi(settings, accountMappings) {
     const creditKey = "sofi-credit";
     const creditActualId = accountMappings[creditKey];
     scope: if (creditActualId) {
-        const startDate = lastSyncDates[creditKey] || syncFromDate;
-
-        if (!startDate) {
+        const creditPlan = getSyncPlan(lastSyncDates, syncFromDate, creditKey, options);
+        if (!creditPlan) {
             console.warn(`SoFi Credit: no sync start date configured, skipping.`);
             break scope
         }
-
-        if (alreadySyncedToday(lastSyncDates, creditKey)) {
+        if (!creditPlan.shouldSync) {
             console.log(`SoFi Credit: already synced today, skipping.`);
             break scope
         }
-
-        const today = offsetDate(isoDate(new Date()), -1);
+        const { startDate, endDate: today, isForced } = creditPlan;
 
         console.log(`SoFi Credit sync: ${startDate} → ${today}`);
 
         try {
+            reportProgress(options, creditKey, 55, "Fetching transactions");
             const transactions = await fetchSoFiCreditTransactions(startDate, today);
             if (transactions.length > 0) {
+                reportProgress(options, creditKey, 80, `Importing ${transactions.length} transactions`);
                 console.log(`SoFi credit: importing ${transactions.length} transactions.`);
                 await sendToHost("importTransactions", {
                     settings,
@@ -128,8 +135,10 @@ export async function syncSoFi(settings, accountMappings) {
             } else {
                 console.log("SoFi credit: no new transactions.");
             }
-
-            await updateLastSyncDate(creditKey, today);
+            await updateLastSyncCount(creditKey, transactions.length);
+            await updateLastSyncMetrics(creditKey, transactions);
+            if (!isForced) await updateLastSyncDate(creditKey, today);
+            reportProgress(options, creditKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("SoFi credit failed:", err.message);
         }
@@ -196,17 +205,19 @@ function parseSoFiCreditCsv(csv) {
     return transactions;
 }
 
-function pollForApolloState(tabId) {
+function pollForApolloState(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
         let shownToUser = false;
 
         const interval = setInterval(async () => {
-            if (Date.now() - start > POLL_TIMEOUT_MS) {
+            const elapsed = Date.now() - start;
+            if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
                 reject(new Error("Timed out waiting for Apollo state"));
                 return;
             }
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
 
             try {
                 const tab = await chrome.tabs.get(tabId);

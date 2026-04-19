@@ -1,24 +1,21 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
 import { sendToHost } from "../host.js";
-import { updateLastSyncDate } from "../utils.js"
 
-export async function syncCapitalOne(settings, accountMappings, accountKey) {
+export async function syncCapitalOne(settings, accountMappings, accountKey, options = {}) {
     console.log("Capital One: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates[accountKey] || syncFromDate;
-
-    if (!startDate) {
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    if (!plan) {
         console.warn("Capital One: no sync start date configured, skipping.");
         return;
     }
-
-    if (alreadySyncedToday(lastSyncDates, accountKey)) {
+    if (!plan.shouldSync) {
         console.log("Capital One: already synced today, skipping.");
         return;
     }
-
-    const today = offsetDate(isoDate(new Date()), -1);
+    const { startDate, endDate: today, isForced } = plan;
     console.log(`Capital One sync: ${startDate} → ${today}`);
+    reportProgress(options, 15, "Waiting for Capital One");
 
     const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
@@ -28,7 +25,9 @@ export async function syncCapitalOne(settings, accountMappings, accountKey) {
     chrome.windows.update(tab.windowId, { focused: true });
     let accountId;
     try {
-        accountId = await pollForCapitalOneData(tab.id);
+        accountId = await pollForCapitalOneData(tab.id, (t) => {
+            reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+        });
     } catch (err) {
         chrome.tabs.remove(tab.id);
         console.error("Capital One: login failed, giving up.");
@@ -38,8 +37,10 @@ export async function syncCapitalOne(settings, accountMappings, accountKey) {
     chrome.tabs.remove(tab.id);
 
     try {
+        reportProgress(options, 55, "Fetching transactions");
         const transactions = await fetchCapitalOneTransactions(accountId, startDate, today);
         if (transactions.length > 0) {
+            reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Capital One: importing ${transactions.length} transactions.`);
             await sendToHost("importTransactions", {
                 settings,
@@ -49,18 +50,24 @@ export async function syncCapitalOne(settings, accountMappings, accountKey) {
         } else {
             console.log("Capital One: no new transactions.");
         }
+        await updateLastSyncCount(accountKey, transactions.length);
+        await updateLastSyncMetrics(accountKey, transactions);
+        reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("Capital One failed:", err.message);
     }
 
-    await updateLastSyncDate(accountKey, today);
+    if (!isForced) await updateLastSyncDate(accountKey, today);
 }
 
-function pollForCapitalOneData(tabId) {
+function pollForCapitalOneData(tabId, onTick) {
     return new Promise((resolve, reject) => {
+        const start = Date.now();
         let dataPageStart = null;
 
         const interval = setInterval(async () => {
+            const elapsed = Date.now() - start;
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
             try {
                 const tab = await chrome.tabs.get(tabId);
 

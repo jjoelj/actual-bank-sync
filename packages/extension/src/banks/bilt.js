@@ -1,25 +1,22 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS } from "../utils.js";
-import { sendToHost } from '../host.js'
-import { updateLastSyncDate } from '../utils.js'
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
+import { sendToHost } from '../host.js';
 
-export async function syncBilt(settings, accountMappings, accountKey) {
+export async function syncBilt(settings, accountMappings, accountKey, options = {}) {
     console.log("Bilt: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates[accountKey] || syncFromDate;
-
-    if (!startDate) {
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    if (!plan) {
         console.warn("Bilt: no sync start date configured, skipping.");
         return;
     }
-
-    const today = offsetDate(isoDate(new Date()), -1);
-
-    if (alreadySyncedToday(lastSyncDates, accountKey)) {
+    if (!plan.shouldSync) {
         console.log("Bilt: already synced today, skipping.");
         return;
     }
+    const { startDate, endDate: today, isForced } = plan;
 
     console.log(`Bilt sync: ${startDate} → ${today}`);
+    reportProgress(options, 15, "Waiting for Bilt");
 
     const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
@@ -28,7 +25,9 @@ export async function syncBilt(settings, accountMappings, accountKey) {
 
     let biltData;
     try {
-        biltData = await pollForBiltData(tab.id);
+        biltData = await pollForBiltData(tab.id, (t) => {
+            reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+        });
     } catch (err) {
         console.error("Bilt: login failed, giving up.");
         return;
@@ -36,6 +35,7 @@ export async function syncBilt(settings, accountMappings, accountKey) {
 
     let csvData;
     try {
+        reportProgress(options, 55, "Fetching transactions");
         const fetchResult = await chrome.tabs.sendMessage(tab.id, {
             type: "FETCH_BILT_TRANSACTIONS",
             cardId: biltData.cardId,
@@ -55,6 +55,7 @@ export async function syncBilt(settings, accountMappings, accountKey) {
 
     const transactions = parseBiltCsv(csvData);
     if (transactions.length > 0) {
+        reportProgress(options, 80, `Importing ${transactions.length} transactions`);
         console.log(`Bilt: importing ${transactions.length} transactions.`);
         await sendToHost("importTransactions", {
             settings,
@@ -64,20 +65,24 @@ export async function syncBilt(settings, accountMappings, accountKey) {
     } else {
         console.log("Bilt: no new transactions.");
     }
-
-    await updateLastSyncDate(accountKey, today);
+    await updateLastSyncCount(accountKey, transactions.length);
+    await updateLastSyncMetrics(accountKey, transactions);
+    reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
+    if (!isForced) await updateLastSyncDate(accountKey, today);
 }
 
-function pollForBiltData(tabId) {
+function pollForBiltData(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
 
         const interval = setInterval(async () => {
-            if (Date.now() - start > POLL_TIMEOUT_MS) {
+            const elapsed = Date.now() - start;
+            if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
                 reject(new Error("Timed out waiting for Bilt data"));
                 return;
             }
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
 
             try {
                 const response = await chrome.tabs.sendMessage(tabId, { type: "GET_BILT_DATA" });

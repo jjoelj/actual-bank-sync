@@ -1,23 +1,25 @@
-import { isoDate, offsetDate, parseCsvLine, alreadySyncedToday, openTabBackground, updateLastSyncDate, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
+import { getSyncPlan, parseCsvLine, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
 import { sendToHost } from '../host.js';
 
-export async function syncVenmo(settings, accountMappings) {
+export async function syncVenmo(settings, accountMappings, options = {}) {
     console.log("Venmo: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
 
     const cashAccountId = accountMappings["venmo-cash"];
     const creditAccountId = accountMappings["venmo-credit"];
-
-    const needsCash = cashAccountId && !alreadySyncedToday(lastSyncDates, "venmo-cash");
-    const needsCredit = creditAccountId && !alreadySyncedToday(lastSyncDates, "venmo-credit");
+    const cashPlan = cashAccountId ? getSyncPlan(lastSyncDates, syncFromDate, "venmo-cash", options) : null;
+    const creditPlan = creditAccountId ? getSyncPlan(lastSyncDates, syncFromDate, "venmo-credit", options) : null;
+    const needsCash = cashAccountId && cashPlan?.shouldSync;
+    const needsCredit = creditAccountId && creditPlan?.shouldSync;
 
     if (!needsCash && !needsCredit) {
         console.log("Venmo: already synced today, skipping.");
         return;
     }
 
-    const cashStart = lastSyncDates["venmo-cash"] || syncFromDate;
-    const creditStart = lastSyncDates["venmo-credit"] || syncFromDate;
+    const cashStart = cashPlan?.startDate;
+    const creditStart = creditPlan?.startDate;
+    const today = cashPlan?.endDate || creditPlan?.endDate;
 
     if (needsCash && !cashStart) {
         console.warn("Venmo: no sync start date configured, skipping.");
@@ -28,17 +30,20 @@ export async function syncVenmo(settings, accountMappings) {
         return;
     }
 
-    const today = offsetDate(isoDate(new Date()), -1);
-
     await closeExistingVenmoTabs();
     await clearVenmoCookies();
     const tab = await openTabBackground("https://venmo.com");
+    if (needsCash) reportProgress(options, "venmo-cash", 15, "Opening Venmo…");
+    if (needsCredit) reportProgress(options, "venmo-credit", 15, "Opening Venmo…");
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
 
     let venmoData;
     try {
-        venmoData = await pollForVenmoData(tab.id, { needsProfileId: needsCash, needsBearerToken: needsCredit });
+        venmoData = await pollForVenmoData(tab.id, { needsProfileId: needsCash, needsBearerToken: needsCredit }, (t) => {
+            if (needsCash) reportProgress(options, "venmo-cash", 15 + Math.round(t * 35), "Logging in…");
+            if (needsCredit) reportProgress(options, "venmo-credit", 15 + Math.round(t * 35), "Logging in…");
+        });
     } catch (err) {
         chrome.tabs.remove(tab.id);
         console.error("Venmo: login failed, giving up.");
@@ -51,34 +56,44 @@ export async function syncVenmo(settings, accountMappings) {
     if (needsCash) {
         console.log(`Venmo sync: ${cashStart} → ${today}`);
         try {
+            reportProgress(options, "venmo-cash", 55, "Fetching transactions");
             const transactions = await fetchVenmoTransactions(venmoData.profileId, cashStart, today);
             if (transactions.length > 0) {
+                reportProgress(options, "venmo-cash", 80, `Importing ${transactions.length} transactions`);
                 console.log(`Venmo: importing ${transactions.length} transactions.`);
                 await sendToHost("importTransactions", { settings, accountId: cashAccountId, transactions });
             } else {
                 console.log("Venmo: no new transactions.");
             }
+            await updateLastSyncCount("venmo-cash", transactions.length);
+            await updateLastSyncMetrics("venmo-cash", transactions);
+            reportProgress(options, "venmo-cash", 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("Venmo failed:", err.message);
         }
-        await updateLastSyncDate("venmo-cash", today);
+        if (!cashPlan.isForced) await updateLastSyncDate("venmo-cash", today);
         await clearSyncError("venmo-cash");
     }
 
     if (needsCredit) {
         console.log(`Venmo Credit sync: ${creditStart} → ${today}`);
         try {
+            reportProgress(options, "venmo-credit", 55, "Fetching transactions");
             const transactions = await fetchVenmoCreditTransactions(venmoData.bearerToken, creditStart, today);
             if (transactions.length > 0) {
+                reportProgress(options, "venmo-credit", 80, `Importing ${transactions.length} transactions`);
                 console.log(`Venmo Credit: importing ${transactions.length} transactions.`);
                 await sendToHost("importTransactions", { settings, accountId: creditAccountId, transactions });
             } else {
                 console.log("Venmo Credit: no new transactions.");
             }
+            await updateLastSyncCount("venmo-credit", transactions.length);
+            await updateLastSyncMetrics("venmo-credit", transactions);
+            reportProgress(options, "venmo-credit", 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("Venmo Credit failed:", err.message);
         }
-        await updateLastSyncDate("venmo-credit", today);
+        if (!creditPlan.isForced) await updateLastSyncDate("venmo-credit", today);
     }
 }
 
@@ -111,8 +126,9 @@ async function clearVenmoCookies() {
     }
 }
 
-function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }) {
+function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
     return new Promise((resolve, reject) => {
+        const start = Date.now();
         let dataPageStart = null;
         let clickedStatements = false;
 
@@ -144,6 +160,8 @@ function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }) {
         const cleanup = () => chrome.tabs.onUpdated.removeListener(onTabUpdated);
 
         const interval = setInterval(async () => {
+            const elapsed = Date.now() - start;
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
             try {
                 const tab = await chrome.tabs.get(tabId);
 

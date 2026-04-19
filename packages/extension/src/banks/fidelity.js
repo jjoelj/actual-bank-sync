@@ -1,23 +1,21 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncFidelity(settings, accountMappings, accountKey) {
+export async function syncFidelity(settings, accountMappings, accountKey, options = {}) {
     console.log("Fidelity: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates[accountKey] || syncFromDate;
-
-    if (!startDate) {
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    if (!plan) {
         console.warn("Fidelity: no sync start date configured, skipping.");
         return;
     }
-
-    if (alreadySyncedToday(lastSyncDates, accountKey)) {
+    if (!plan.shouldSync) {
         console.log("Fidelity: already synced today, skipping.");
         return;
     }
-
-    const today = offsetDate(isoDate(new Date()), -1);
+    const { startDate, endDate: today, isForced } = plan;
     console.log(`Fidelity sync: ${startDate} → ${today}`);
+    reportProgress(options, 15, "Waiting for Fidelity");
 
     const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
@@ -28,7 +26,9 @@ export async function syncFidelity(settings, accountMappings, accountKey) {
 
     let fidelityData;
     try {
-        fidelityData = await pollForFidelityData(tab.id);
+        fidelityData = await pollForFidelityData(tab.id, (t, msg) => {
+            reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
+        });
     } catch (err) {
         chrome.tabs.remove(tab.id);
         console.error("Fidelity: login failed, giving up.");
@@ -37,6 +37,7 @@ export async function syncFidelity(settings, accountMappings, accountKey) {
 
     let csvData;
     try {
+        reportProgress(options, 55, "Fetching transactions");
         const result = await chrome.tabs.sendMessage(tab.id, {
             type: "FETCH_FIDELITY_TRANSACTIONS",
             accessToken: fidelityData.accessToken,
@@ -57,6 +58,7 @@ export async function syncFidelity(settings, accountMappings, accountKey) {
     try {
         const transactions = parseFidelityCsv(csvData);
         if (transactions.length > 0) {
+            reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Fidelity: importing ${transactions.length} transactions.`);
             await sendToHost("importTransactions", {
                 settings,
@@ -66,21 +68,34 @@ export async function syncFidelity(settings, accountMappings, accountKey) {
         } else {
             console.log("Fidelity: no new transactions.");
         }
+        await updateLastSyncCount(accountKey, transactions.length);
+        await updateLastSyncMetrics(accountKey, transactions);
+        reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("Fidelity import failed:", err.message);
     }
 
-    await updateLastSyncDate(accountKey, today);
+    if (!isForced) await updateLastSyncDate(accountKey, today);
 }
 
-function pollForFidelityData(tabId) {
+const FIDELITY_STATE_LABELS = {
+    "click-card": "Selecting card…",
+    "click-download": "Downloading transactions…",
+    "await-redirect": "Awaiting SSO redirect…",
+    "get-data": "Loading transaction data…",
+};
+
+function pollForFidelityData(tabId, onTick) {
     return new Promise((resolve, reject) => {
+        const start = Date.now();
         let dataPageStart = null;
         let trackingTabId = tabId;
         let listenerRegistered = false;
         let fidelityState = "click-card";
 
         const interval = setInterval(async () => {
+            const elapsed = Date.now() - start;
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), FIDELITY_STATE_LABELS[fidelityState]);
             try {
                 const tab = await chrome.tabs.get(trackingTabId);
                 console.log("fidelity state:", fidelityState, "url:", tab.url, "status:", tab.status);

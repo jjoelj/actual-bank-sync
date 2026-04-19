@@ -6,161 +6,577 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --bg:           #080811;
+      --surface:      #141520;
+      --header:       #102a43;
+      --border:       #243b53;
+      --border-mid:   #334e68;
+      --border-light: #486581;
+      --text:         #d9e2ec;
+      --text-muted:   #9fb3c8;
+      --text-dim:     #627d98;
+      --accent:       #9446ed;
+      --accent-hover: #7a0ecc;
+      --success:      #27ab83;
+      --error:        #f86a6a;
+    }
+
     body {
       width: 380px;
       font-family: system-ui, sans-serif;
       font-size: 13px;
-      background: #080811;
-      color: #d9e2ec;
+      background: var(--bg);
+      color: var(--text);
     }
 
+    /* ── Header ── */
     header {
-      background: #102a43;
-      padding: 8px 12px;
+      background: var(--header);
+      padding: 10px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid #486581;
-      flex-wrap: wrap;
-      gap: 4px;
+      border-bottom: 1px solid var(--border-light);
     }
 
-    header h1 {
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .logo { color: var(--accent); font-size: 17px; line-height: 1; }
+
+    .header-title {
       font-size: 14px;
       font-weight: 600;
-      color: #d9e2ec;
-      letter-spacing: 0.5px;
+      color: var(--text);
+      letter-spacing: 0.3px;
     }
 
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #settings-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 15px;
+      padding: 3px 5px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+
+    #settings-btn:hover  { color: var(--text); background: var(--border); }
+    #settings-btn.active { color: var(--accent); }
+
     #sync-btn {
-      background: #9446ed;
+      background: var(--accent);
       color: white;
       border: none;
       border-radius: 4px;
-      padding: 5px 12px;
+      padding: 5px 13px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 600;
     }
 
-    #sync-btn:hover { background: #7a0ecc; }
-    #sync-btn:disabled { background: #334e68; cursor: not-allowed; }
+    #sync-btn:hover    { background: var(--accent-hover); }
+    #sync-btn:disabled { background: var(--border-mid); cursor: not-allowed; }
 
-    section {
-      padding: 8px 12px;
-      border-bottom: 1px solid #243b53;
-    }
-
-    section h2 {
+    #force-sync-btn {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+      padding: 5px 9px;
+      cursor: pointer;
       font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: #9fb3c8;
-      margin-bottom: 6px;
+      font-weight: 600;
     }
 
-    label {
+    #force-sync-btn:hover { border-color: var(--accent); color: var(--text); }
+    #force-sync-btn:disabled { color: var(--text-dim); border-color: var(--border); cursor: not-allowed; }
+
+    /* ── Status bar ── */
+    #status-bar {
+      padding: 6px 14px;
+      font-size: 11px;
+      color: var(--text-dim);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+    }
+
+    #status-bar.error { color: var(--error); }
+    #status-bar.ok    { color: var(--success); }
+
+    /* ── Views ── */
+    #accounts-view,
+    #settings-view {
+      padding: 12px 14px;
+    }
+
+    #accounts-view {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    /* ── Settings view ── */
+    .field-group { margin-bottom: 10px; }
+
+    .field-label {
       display: block;
-      margin-bottom: 6px;
-      color: #9fb3c8;
       font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     input {
       display: block;
       width: 100%;
-      margin-top: 3px;
-      background: #243b53;
-      border: 1px solid #486581;
+      background: var(--border);
+      border: 1px solid var(--border-light);
       border-radius: 4px;
-      color: #d9e2ec;
-      padding: 5px 8px;
+      color: var(--text);
+      padding: 6px 8px;
       font-size: 12px;
       outline: none;
     }
 
-    input:focus { border-color: #9446ed; }
+    input:focus    { border-color: var(--accent); }
+    input[readonly]{ color: var(--text-dim); cursor: not-allowed; }
 
-    #save-settings-btn {
-      margin-top: 10px;
-      background: #243b53;
-      color: #d9e2ec;
-      border: 1px solid #486581;
+    .btn {
+      background: var(--border);
+      color: var(--text);
+      border: 1px solid var(--border-light);
       border-radius: 4px;
-      padding: 5px 12px;
+      padding: 6px 14px;
       cursor: pointer;
       font-size: 12px;
     }
 
-    #save-settings-btn:hover { background: #334e68; }
+    .btn:hover { background: var(--border-mid); }
 
-    /* Account rows */
-    .account-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 4px;
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      font-weight: 600;
     }
 
-    .account-label {
-      flex: 1;
-      color: #d9e2ec;
-      font-size: 12px;
+    .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+    .settings-actions { margin-top: 12px; }
+
+    #budget-fields {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── Account rows ── */
+    #sync-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 12px;
+      row-gap: 6px;
+      align-items: start;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(16, 42, 67, 0.5), rgba(20, 21, 32, 0.92));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      display: none;
+    }
+
+    .summary-primary {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-start;
+    }
+
+    .summary-pill {
+      font-size: 10px;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text);
+      background: rgba(51, 78, 104, 0.55);
+      border: 1px solid var(--border-light);
+      border-radius: 999px;
+      padding: 6px 8px;
+      white-space: nowrap;
+    }
+
+    .summary-stats {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .summary-stat {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .summary-cashflow {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: flex-end;
+        gap: 3px;
+        min-height: 32px;
+        font-size: 12px;
+        text-align: right;
+        padding-top: 2px;
+      }
+
+    .summary-cashflow:empty {
+      display: none;
+    }
+
+    .summary-flow {
+        color: var(--text-muted);
+        width: 100%;
+        display: grid;
+        grid-template-columns: 28px max-content;
+        justify-content: end;
+        align-items: baseline;
+        column-gap: 8px;
+        white-space: nowrap;
+        line-height: 1.05;
+        font-variant-numeric: tabular-nums;
+      }
+
+    .summary-flow-label {
+        color: var(--text-dim);
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        text-align: right;
+      }
+
+    .summary-flow.income {
+      color: var(--success);
+    }
+
+    .summary-flow.outflow {
+      color: var(--error);
+    }
+
+    .summary-flow.net {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .summary-flow.empty {
+      display: block;
+      width: auto;
+      color: var(--text-dim);
+    }
+
+    .summary-next-alarm {
+      grid-column: 1;
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.1;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
-    select {
-      flex: 1;
-      background: #243b53;
-      border: 1px solid #486581;
-      border-radius: 4px;
-      color: #d9e2ec;
-      padding: 4px 6px;
-      font-size: 12px;
-      outline: none;
+    #accounts-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding-right: 2px;
+      margin-right: -2px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--accent) transparent;
     }
 
-    select:focus { border-color: #9446ed; }
+    #accounts-list::-webkit-scrollbar { width: 6px; }
+    #accounts-list::-webkit-scrollbar-track { background: transparent; }
+    #accounts-list::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, var(--border-light), var(--accent));
+      border-radius: 999px;
+    }
 
-    .remove-btn {
+    .account-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) minmax(120px, 144px) auto auto auto;
+      grid-template-rows: auto;
+      gap: 4px 8px;
+      align-items: center;
+      padding: 7px 8px;
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(20, 21, 32, 0.96), rgba(16, 42, 67, 0.58));
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+
+    .account-row:hover {
+      border-color: var(--border-light);
+      background:
+        linear-gradient(180deg, rgba(20, 21, 32, 0.98), rgba(16, 42, 67, 0.72));
+    }
+
+    .account-info {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto auto auto auto;
+      align-items: start;
+      row-gap: 1px;
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .account-row.is-mapped:not(.is-editing) .account-info {
+      grid-column: 2 / 4;
+    }
+
+    .account-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      grid-column: 1;
+      grid-row: 1;
+    }
+
+    .account-source {
+      font-size: 10px;
+      line-height: 1.1;
+      color: var(--text-dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      grid-column: 1;
+      grid-row: 2;
+    }
+
+    .account-sub {
+      font-size: 10px;
+      line-height: 1.2;
+      color: var(--text-dim);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      grid-column: 1;
+      grid-row: 3;
+    }
+
+    .account-sub.synced  { color: var(--success); }
+    .account-sub.syncing { color: var(--text-muted); }
+    .account-sub.error   { color: var(--error); }
+    .account-sub .amount-neg { color: var(--error); }
+
+    .account-row:not(.is-mapped) .account-sub {
+      display: none;
+    }
+
+    .account-progress {
+      grid-column: 1;
+      grid-row: 4;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(51, 78, 104, 0.45);
+      overflow: hidden;
+      display: none;
+    }
+
+    .account-progress-bar {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), #4fd1c5);
+      transition: width 0.18s ease;
+    }
+
+    .account-row.is-syncing .account-progress {
+      display: block;
+    }
+
+    select {
+      min-width: 0;
+      background: var(--border);
+      border: 1px solid var(--border-light);
+      border-radius: 7px;
+      color: var(--text);
+      padding: 5px 8px;
+      font-size: 11px;
+      outline: none;
+      width: 100%;
+      grid-column: 3;
+      grid-row: 1;
+      align-self: center;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    select:focus { border-color: var(--accent); }
+    option:disabled { color: var(--text-dim); }
+
+    .mapping-display {
+      min-width: 0;
+      width: 100%;
+      background: rgba(36, 59, 83, 0.45);
+      border: 1px solid var(--border-light);
+      border-radius: 7px;
+      color: var(--text);
+      padding: 5px 8px;
+      font-size: 11px;
+      outline: none;
+      text-align: left;
+      grid-column: 3;
+      grid-row: 1;
+      align-self: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+
+    .mapping-display:hover {
+      border-color: var(--accent);
+      background: rgba(51, 78, 104, 0.55);
+    }
+
+    .account-row.is-mapped:not(.is-editing) select,
+    .account-row.is-mapped:not(.is-editing) .mapping-display {
+      display: none;
+    }
+
+    .account-row.is-editing .mapping-display,
+    .account-row:not(.is-mapped) .mapping-display {
+      display: none;
+    }
+
+    .icon-btn {
       background: transparent;
       border: none;
-      color: #627d98;
+      color: var(--text-dim);
       cursor: pointer;
-      font-size: 14px;
-      padding: 0 2px;
+      font-size: 11px;
+      padding: 3px 4px;
+      border-radius: 999px;
       line-height: 1;
+      align-self: center;
+      grid-column: 4;
+      grid-row: 1;
     }
 
-    .remove-btn:hover { color: #f86a6a; }
+    .icon-btn:hover        { color: var(--text); background: var(--border-mid); }
+    .icon-btn.remove:hover { color: var(--error); background: transparent; }
 
-    /* Add account area */
+    .force-sync {
+      grid-column: 4;
+    }
+
+    .edit-mapping {
+      grid-column: 5;
+    }
+
+    .remove {
+      grid-column: 6;
+    }
+
+    .account-row:not(.is-mapped) .edit-mapping,
+    .account-row.is-editing .edit-mapping,
+    .account-row:not(.is-mapped) .force-sync,
+    .account-row.is-editing .force-sync {
+      display: none;
+    }
+
+    .drag-handle {
+      color: var(--text-dim);
+      cursor: grab;
+      font-size: 13px;
+      line-height: 1;
+      padding: 3px 1px 0 0;
+      flex-shrink: 0;
+      user-select: none;
+      grid-row: 1;
+      align-self: center;
+    }
+
+    .drag-handle:hover { color: var(--text); }
+    .drag-handle:active { cursor: grabbing; }
+
+    .account-row.dragging {
+      opacity: 0.55;
+    }
+
+    /* ── Sync-from section ── */
+    #sync-from-section {
+      padding: 8px 10px;
+      background:
+        linear-gradient(180deg, rgba(16, 42, 67, 0.45), rgba(20, 21, 32, 0.92));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    }
+
+    #sync-from-section .field-label { margin-bottom: 5px; display: flex; align-items: center; gap: 4px; }
+
+    .tooltip-icon { cursor: help; color: var(--text-dim); font-size: 12px; font-weight: normal; }
+
+    /* ── Add account ── */
     #add-account-area {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 10px;
-      position: relative;
+      position: sticky;
+      bottom: 0;
+      margin-top: 2px;
+      padding-top: 6px;
+      background: linear-gradient(180deg, rgba(8, 8, 17, 0), rgba(8, 8, 17, 0.9) 40%, rgba(8, 8, 17, 1));
+      z-index: 2;
     }
 
     #add-account-btn {
-      background: transparent;
-      border: 1px dashed #486581;
-      color: #9fb3c8;
-      border-radius: 4px;
-      padding: 5px 12px;
+      background: linear-gradient(180deg, rgba(36, 59, 83, 0.35), rgba(20, 21, 32, 0.95));
+      border: 1px dashed var(--border-light);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 8px 10px;
       cursor: pointer;
-      font-size: 12px;
+      font-size: 11px;
       width: 100%;
       text-align: left;
+      font-weight: 600;
     }
 
     #add-account-btn:hover {
-      border-color: #9446ed;
-      color: #d9e2ec;
+      border-color: var(--accent);
+      color: var(--text);
+      background: linear-gradient(180deg, rgba(72, 101, 129, 0.28), rgba(20, 21, 32, 0.98));
     }
 
     #account-type-dropdown {
@@ -168,145 +584,108 @@
       top: 100%;
       left: 0;
       right: 0;
-      background: #141520;
-      border: 1px solid #243b53;
-      border-radius: 4px;
+      background: var(--surface);
+      border: 1px solid var(--border-light);
+      border-radius: 6px;
       z-index: 10;
-      margin-top: 2px;
+      margin-top: 4px;
       display: none;
       max-height: 150px;
       overflow-y: auto;
       scrollbar-width: thin;
-      scrollbar-color: #9446ed #243b53;
+      scrollbar-color: var(--accent) var(--border);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
     }
 
-    #account-type-dropdown::-webkit-scrollbar {
-      width: 4px;
-    }
-
-    #account-type-dropdown::-webkit-scrollbar-track {
-      background: #243b53;
-      border-radius: 4px;
-    }
-
-    #account-type-dropdown::-webkit-scrollbar-thumb {
-      background: #9446ed;
-      border-radius: 4px;
-    }
+    #account-type-dropdown::-webkit-scrollbar       { width: 4px; }
+    #account-type-dropdown::-webkit-scrollbar-track { background: var(--border); }
+    #account-type-dropdown::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }
 
     #account-type-dropdown.open { display: block; }
-
-    #accounts-section {
-      padding-bottom: 8px;
-    }
 
     .dropdown-option {
       padding: 8px 12px;
       cursor: pointer;
       font-size: 12px;
-      color: #d9e2ec;
+      color: var(--text);
     }
 
-    .dropdown-option:hover {
-      background: #243b53;
-    }
-
-    option:disabled {
-      color: #627d98;
-    }
-
-    #accounts-list {
-      margin-bottom: 8px;
-    }
-
-    #save-mappings-btn {
-      background: #243b53;
-      color: #d9e2ec;
-      border: 1px solid #486581;
-      border-radius: 4px;
-      padding: 5px 12px;
-      cursor: pointer;
-      font-size: 12px;
-      display: none;
-    }
-
-    #save-mappings-btn:hover { background: #334e68; }
-
-    #status {
-      font-size: 11px;
-      color: #9fb3c8;
-      flex-basis: 100%;
-    }
-
-    #status.error { color: #f86a6a; }
-    #status.ok { color: #27ab83; }
-
-    .empty-msg { color: #627d98; font-style: italic; font-size: 12px; }
-
-    .account-sub {
-      font-size: 10px;
-      color: #27ab83;
-      margin-top: 1px;
-    }
+    .dropdown-option:hover { background: var(--border); }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>⬡ Actual Bank Sync</h1>
-  <button id="sync-btn" style="display:none">Sync Now</button>
-  <div id="status">Last sync: never</div>
+  <div class="header-left">
+    <span class="logo">⬡</span>
+    <span class="header-title">Actual Bank Sync</span>
+  </div>
+  <div class="header-right">
+    <button id="settings-btn" title="Settings">⚙</button>
+    <button id="force-sync-btn" style="display:none">Last Day</button>
+    <button id="sync-btn" style="display:none">Sync Now</button>
+  </div>
 </header>
 
-<!-- Settings -->
-<section>
-  <h2 id="settings-toggle" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
-    Actual Settings <span id="settings-chevron">▾</span>
-  </h2>
-  <div id="settings-body">
-    <label>
-      Server URL
-      <input id="actual-url" type="url" placeholder="http://localhost:5006" />
-    </label>
-    <label>
-      Password
-      <input id="actual-password" type="password" placeholder="••••••••" />
-    </label>
-    <button id="connect-btn" style="margin-top:10px;background:#e94560;color:white;border:none;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:12px;font-weight:600;">Connect</button>
+<div id="status-bar">Not synced yet</div>
 
-    <div id="budget-fields" style="display:none">
-      <label style="margin-top:10px">
-        Sync ID
-        <input id="actual-sync-id" type="password" placeholder="abc-123" />
-      </label>
-      <label>
-        File Password (if encrypted)
-        <input id="actual-file-password" type="password" placeholder="leave blank if none" />
-      </label>
-      <button id="save-settings-btn">Save Settings</button>
+<!-- Accounts view -->
+<div id="accounts-view" style="display:none">
+  <div id="sync-summary">
+    <div class="summary-primary">
+      <div id="summary-accounts" class="summary-pill"></div>
+      <div class="summary-stats">
+        <div id="summary-transactions" class="summary-stat"></div>
+      </div>
+      <div id="summary-next-alarm" class="summary-next-alarm"></div>
     </div>
+    <div id="summary-cashflow" class="summary-cashflow"></div>
   </div>
-</section>
 
-<!-- Account Mappings -->
-<section id="accounts-section" style="display:none">
-  <h2>Accounts</h2>
-
-  <div id="sync-from-section" style="display:none;margin-bottom:10px;">
-    <label style="color:#aaa;font-size:11px;display:flex;align-items:center;gap:4px;">
+  <div id="sync-from-section" style="display:none">
+    <span class="field-label">
       Start syncing from
-      <span id="sync-from-tooltip" title="Applies to any accounts that haven't been synced yet. Already-synced accounts will continue from where they left off." style="cursor:help;color:#555;font-size:13px;">ⓘ</span>
-    </label>
-    <input id="sync-from-date" type="date" style="margin-top:4px;" />
+      <span class="tooltip-icon" title="Applies to accounts that haven't synced yet. Already-synced accounts continue from where they left off.">ⓘ</span>
+    </span>
+    <input id="sync-from-date" type="date" />
   </div>
+
   <div id="accounts-list"></div>
 
   <div id="add-account-area">
     <button id="add-account-btn">+ Add account</button>
     <div id="account-type-dropdown"></div>
-
   </div>
-</section>
+</div>
+
+<!-- Settings view -->
+<div id="settings-view" style="display:none">
+  <div class="field-group">
+    <span class="field-label">Server URL</span>
+    <input id="actual-url" type="url" placeholder="http://localhost:5006" />
+  </div>
+  <div class="field-group">
+    <span class="field-label">Password</span>
+    <input id="actual-password" type="password" placeholder="••••••••" />
+  </div>
+  <div class="settings-actions">
+    <button id="connect-btn" class="btn btn-primary">Connect</button>
+  </div>
+
+  <div id="budget-fields" style="display:none">
+    <div class="field-group">
+      <span class="field-label">Sync ID</span>
+      <input id="actual-sync-id" type="password" placeholder="abc-123" />
+    </div>
+    <div class="field-group">
+      <span class="field-label">File Password (if encrypted)</span>
+      <input id="actual-file-password" type="password" placeholder="leave blank if none" />
+    </div>
+    <div class="settings-actions">
+      <button id="save-settings-btn" class="btn">Save Settings</button>
+    </div>
+  </div>
+</div>
 
 <script type="module" src="src/popup.js"></script>
 </body>

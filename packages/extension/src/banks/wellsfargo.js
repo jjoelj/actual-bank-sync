@@ -1,23 +1,21 @@
-import { isoDate, offsetDate, alreadySyncedToday, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, updateLastSyncDate } from "../utils.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
 import { sendToHost } from "../host.js";
 
-export async function syncWellsFargo(settings, accountMappings, accountKey) {
+export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
     console.log("Wells Fargo: starting");
     const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const startDate = lastSyncDates[accountKey] || syncFromDate;
-
-    if (!startDate) {
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    if (!plan) {
         console.warn("WF: no sync start date configured, skipping.");
         return;
     }
-
-    if (alreadySyncedToday(lastSyncDates, accountKey)) {
+    if (!plan.shouldSync) {
         console.log("WF: already synced today, skipping.");
         return;
     }
-
-    const today = offsetDate(isoDate(new Date()), -1);
+    const { startDate, endDate: today, isForced } = plan;
     console.log(`WF sync: ${startDate} → ${today}`);
+    reportProgress(options, 15, "Waiting for Wells Fargo");
 
     const actualAccountId = accountMappings[accountKey];
     if (!actualAccountId) return;
@@ -28,7 +26,9 @@ export async function syncWellsFargo(settings, accountMappings, accountKey) {
 
     let wfData;
     try {
-        wfData = await pollForWFData(tab.id);
+        wfData = await pollForWFData(tab.id, (t, msg) => {
+            reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
+        });
         console.log("WF download URL:", wfData.downloadUrl);
     } catch (err) {
         chrome.tabs.remove(tab.id);
@@ -42,6 +42,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey) {
 
     let csvData;
     try {
+        reportProgress(options, 55, "Fetching transactions");
         const result = await chrome.tabs.sendMessage(tab.id, {
             type: "FETCH_WF_TRANSACTIONS",
             accountId: wfData.accountId,
@@ -62,6 +63,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey) {
     try {
         const transactions = parseWFCsv(csvData);
         if (transactions.length > 0) {
+            reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`WF: importing ${transactions.length} transactions.`);
             await sendToHost("importTransactions", {
                 settings,
@@ -71,21 +73,33 @@ export async function syncWellsFargo(settings, accountMappings, accountKey) {
         } else {
             console.log("WF: no new transactions.");
         }
+        await updateLastSyncCount(accountKey, transactions.length);
+        await updateLastSyncMetrics(accountKey, transactions);
+        reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("WF import failed:", err.message);
     }
 
-    await updateLastSyncDate(accountKey, today);
+    if (!isForced) await updateLastSyncDate(accountKey, today);
 }
 
-function pollForWFData(tabId) {
+const WF_STATE_LABELS = {
+    "click-card": "Selecting account…",
+    "click-download": "Navigating to download…",
+    "get-data": "Downloading transactions…",
+};
+
+function pollForWFData(tabId, onTick) {
     return new Promise((resolve, reject) => {
+        const start = Date.now();
         let dataPageStart = null;
         let wfState = "click-card";
         let clickedCard = false;
         let clickedDownload = false;
 
         const interval = setInterval(async () => {
+            const elapsed = Date.now() - start;
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), WF_STATE_LABELS[wfState]);
             try {
                 const tab = await chrome.tabs.get(tabId);
                 console.log("WF state:", wfState, "url:", tab.url);
