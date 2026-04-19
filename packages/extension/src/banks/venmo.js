@@ -1,5 +1,4 @@
-import { getSyncPlan, parseCsvLine, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
-import { sendToHost } from '../host.js';
+import { getSyncPlan, parseCsvLine, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
 
 export async function syncVenmo(settings, accountMappings, options = {}) {
     console.log("Venmo: starting");
@@ -61,7 +60,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
             if (transactions.length > 0) {
                 reportProgress(options, "venmo-cash", 80, `Importing ${transactions.length} transactions`);
                 console.log(`Venmo: importing ${transactions.length} transactions.`);
-                await sendToHost("importTransactions", { settings, accountId: cashAccountId, transactions });
+                await importTransactions("Venmo", settings, cashAccountId, transactions);
             } else {
                 console.log("Venmo: no new transactions.");
             }
@@ -83,7 +82,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
             if (transactions.length > 0) {
                 reportProgress(options, "venmo-credit", 80, `Importing ${transactions.length} transactions`);
                 console.log(`Venmo Credit: importing ${transactions.length} transactions.`);
-                await sendToHost("importTransactions", { settings, accountId: creditAccountId, transactions });
+                await importTransactions("Venmo Credit", settings, creditAccountId, transactions);
             } else {
                 console.log("Venmo Credit: no new transactions.");
             }

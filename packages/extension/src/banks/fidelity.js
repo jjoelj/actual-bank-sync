@@ -1,5 +1,4 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
-import { sendToHost } from "../host.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
 
 export async function syncFidelity(settings, accountMappings, accountKey, options = {}) {
     console.log("Fidelity: starting");
@@ -60,11 +59,7 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Fidelity: importing ${transactions.length} transactions.`);
-            await sendToHost("importTransactions", {
-                settings,
-                accountId: actualAccountId,
-                transactions,
-            });
+            await importTransactions("Fidelity", settings, actualAccountId, transactions);
         } else {
             console.log("Fidelity: no new transactions.");
         }

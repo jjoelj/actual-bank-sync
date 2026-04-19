@@ -36,10 +36,12 @@ try {
             const accounts = await actual.getAccounts();
             result = accounts.map((a) => ({id: a.id, name: a.name}));
         } else if (command === "importTransactions") {
-            result = await actual.importTransactions(rest.accountId, rest.transactions, {
-                defaultCleared: true,
-                reimportDeleted: true,
-            });
+            for (let transaction of rest.transactions) {
+                Object.assign(result, await actual.importTransactions(rest.accountId, [transaction], {
+                    defaultCleared: true,
+                    reimportDeleted: true,
+                }));
+            }
         }
     }
 

@@ -1,5 +1,4 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
-import { sendToHost } from "../host.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
 
 export async function syncCapitalOne(settings, accountMappings, accountKey, options = {}) {
     console.log("Capital One: starting");
@@ -42,11 +41,7 @@ export async function syncCapitalOne(settings, accountMappings, accountKey, opti
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Capital One: importing ${transactions.length} transactions.`);
-            await sendToHost("importTransactions", {
-                settings,
-                accountId: actualAccountId,
-                transactions,
-            });
+            await importTransactions("Capital One", settings, actualAccountId, transactions);
         } else {
             console.log("Capital One: no new transactions.");
         }

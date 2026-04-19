@@ -1,5 +1,4 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
-import { sendToHost } from "../host.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
 
 export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
     console.log("Wells Fargo: starting");
@@ -65,11 +64,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`WF: importing ${transactions.length} transactions.`);
-            await sendToHost("importTransactions", {
-                settings,
-                accountId: actualAccountId,
-                transactions,
-            });
+            await importTransactions("WF", settings, actualAccountId, transactions);
         } else {
             console.log("WF: no new transactions.");
         }

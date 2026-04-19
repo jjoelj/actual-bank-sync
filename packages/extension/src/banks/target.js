@@ -1,5 +1,4 @@
-import { getSyncPlan, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
-import { sendToHost } from "../host.js";
+import { getSyncPlan, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
 
 export async function syncTarget(settings, accountMappings, accountKey, options = {}) {
     console.log("Target: starting");
@@ -59,11 +58,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Target: importing ${transactions.length} transactions.`);
-            await sendToHost("importTransactions", {
-                settings,
-                accountId: actualAccountId,
-                transactions,
-            });
+            await importTransactions("Target", settings, actualAccountId, transactions);
         } else {
             console.log("Target: no new transactions.");
         }

@@ -1,6 +1,29 @@
 export const POLL_INTERVAL_MS = 3000;
 export const POLL_TIMEOUT_MS = 2 * 60 * 1000;
 
+import { sendToHost } from './host.js';
+
+export async function importTransactions(label, settings, accountId, transactions) {
+    const idCounts = new Map();
+    const deduped = transactions.map(tx => {
+        if (!tx.imported_id) return tx;
+        const n = (idCounts.get(tx.imported_id) || 0) + 1;
+        idCounts.set(tx.imported_id, n);
+        return n > 1 ? { ...tx, imported_id: `${tx.imported_id}-${n}` } : tx;
+    });
+
+    const collisions = [...idCounts.values()].filter(n => n > 1).length;
+    if (collisions) console.warn(`${label}: ${collisions} imported_id collision(s) resolved`);
+    console.log(`${label}: imported_ids`, deduped.map(tx => tx.imported_id));
+
+    const result = await sendToHost("importTransactions", { settings, accountId, transactions: deduped });
+    const added = result?.added?.length ?? 0;
+    const updated = result?.updated?.length ?? 0;
+    const skipped = deduped.length - added - updated;
+    console.log(`${label}: sent ${deduped.length}, added ${added}, updated ${updated}, skipped ${skipped}`);
+    return result;
+}
+
 export function getDateChunks(startDate, endDate, maxDays) {
     const chunks = [];
     let current = new Date(startDate);

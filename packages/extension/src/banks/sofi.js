@@ -1,5 +1,4 @@
-import { getDateChunks, getSyncPlan, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
-import { sendToHost } from '../host.js';
+import { getDateChunks, getSyncPlan, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
 
 export async function syncSoFi(settings, accountMappings, options = {}) {
     console.log("SoFi: starting");
@@ -94,11 +93,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
             reportProgress(options, mappingKey, 80, `Importing ${transactions.length} transactions`);
             console.log(`SoFi ${account.id}: importing ${transactions.length} transactions.`);
 
-            await sendToHost("importTransactions", {
-                settings,
-                accountId: actualAccountId,
-                transactions,
-            });
+            await importTransactions(`SoFi ${account.id}`, settings, actualAccountId, transactions);
             reportProgress(options, mappingKey, 100, `Imported ${transactions.length}`);
         } catch (err) {
             console.error(`SoFi account ${account.id} failed:`, err.message);
@@ -127,11 +122,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
             if (transactions.length > 0) {
                 reportProgress(options, creditKey, 80, `Importing ${transactions.length} transactions`);
                 console.log(`SoFi credit: importing ${transactions.length} transactions.`);
-                await sendToHost("importTransactions", {
-                    settings,
-                    accountId: creditActualId,
-                    transactions,
-                });
+                await importTransactions("SoFi Credit", settings, creditActualId, transactions);
             } else {
                 console.log("SoFi credit: no new transactions.");
             }

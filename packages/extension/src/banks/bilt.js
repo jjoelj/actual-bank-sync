@@ -1,5 +1,4 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics } from "../utils.js";
-import { sendToHost } from '../host.js';
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
 
 export async function syncBilt(settings, accountMappings, accountKey, options = {}) {
     console.log("Bilt: starting");
@@ -57,11 +56,7 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     if (transactions.length > 0) {
         reportProgress(options, 80, `Importing ${transactions.length} transactions`);
         console.log(`Bilt: importing ${transactions.length} transactions.`);
-        await sendToHost("importTransactions", {
-            settings,
-            accountId: actualAccountId,
-            transactions,
-        });
+        await importTransactions("Bilt", settings, actualAccountId, transactions);
     } else {
         console.log("Bilt: no new transactions.");
     }
