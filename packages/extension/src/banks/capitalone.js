@@ -1,4 +1,4 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions, getDateChunks } from "../utils.js";
 
 export async function syncCapitalOne(settings, accountMappings, accountKey, options = {}) {
     console.log("Capital One: starting");
@@ -92,22 +92,29 @@ function pollForCapitalOneData(tabId, onTick) {
 
 async function fetchCapitalOneTransactions(accountId, startDate, endDate) {
     const encodedId = encodeURIComponent(encodeURIComponent(accountId));
-    const url = `https://myaccounts.capitalone.com/web-api/protected/17463/credit-cards/accounts/${encodedId}/transactions/download?fromTransactionDate=${startDate}&toTransactionDate=${endDate}&documentFormatType=application/csv&acceptLanguage=en-US&X-User-Action=ease.downloadTransactions`;
-    console.log("Capital One: fetching", url);
-    const response = await fetch(url, {
-        headers: {
-            accept: "application/json;v=1",
-            "accept-language": "en-US",
-            "x-user-action": "ease.downloadTransactions",
-            "x-ui-routing-id": "Card/REFID/DownloadTransactions",
-        },
-        credentials: "include",
-    });
+    const chunks = getDateChunks(startDate, endDate, 365);
+    const allTransactions = [];
 
-    if (!response.ok) throw new Error(`Capital One export failed: ${response.status}`);
+    for (const [chunkStart, chunkEnd] of chunks) {
+        const url = `https://myaccounts.capitalone.com/web-api/protected/17463/credit-cards/accounts/${encodedId}/transactions/download?fromTransactionDate=${chunkStart}&toTransactionDate=${chunkEnd}&documentFormatType=application/csv&acceptLanguage=en-US&X-User-Action=ease.downloadTransactions`;
+        console.log("Capital One: fetching", url);
+        const response = await fetch(url, {
+            headers: {
+                accept: "application/json;v=1",
+                "accept-language": "en-US",
+                "x-user-action": "ease.downloadTransactions",
+                "x-ui-routing-id": "Card/REFID/DownloadTransactions",
+            },
+            credentials: "include",
+        });
 
-    const csv = await response.text();
-    return parseCapitalOneCsv(csv);
+        if (!response.ok) throw new Error(`Capital One export failed: ${response.status}`);
+
+        const csv = await response.text();
+        allTransactions.push(...parseCapitalOneCsv(csv));
+    }
+
+    return allTransactions;
 }
 
 function parseCapitalOneCsv(csv) {

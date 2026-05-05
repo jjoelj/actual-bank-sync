@@ -1,4 +1,4 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions, getDateChunks } from "../utils.js";
 
 export async function syncBilt(settings, accountMappings, accountKey, options = {}) {
     console.log("Bilt: starting");
@@ -32,18 +32,21 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
         return;
     }
 
-    let csvData;
+    let transactions = [];
     try {
         reportProgress(options, 55, "Fetching transactions");
-        const fetchResult = await chrome.tabs.sendMessage(tab.id, {
-            type: "FETCH_BILT_TRANSACTIONS",
-            cardId: biltData.cardId,
-            startDate,
-            endDate: today,
-            accessToken: biltData.accessToken,
-        });
-        if (fetchResult.error) throw new Error(fetchResult.error);
-        csvData = fetchResult.data;
+        const chunks = getDateChunks(startDate, today, 180);
+        for (const [chunkStart, chunkEnd] of chunks) {
+            const fetchResult = await chrome.tabs.sendMessage(tab.id, {
+                type: "FETCH_BILT_TRANSACTIONS",
+                cardId: biltData.cardId,
+                startDate: chunkStart,
+                endDate: chunkEnd,
+                accessToken: biltData.accessToken,
+            });
+            if (fetchResult.error) throw new Error(fetchResult.error);
+            transactions.push(...parseBiltCsv(fetchResult.data));
+        }
     } catch (err) {
         console.error("Bilt fetch failed:", err.message);
         chrome.tabs.remove(tab.id);
@@ -51,8 +54,6 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     }
 
     chrome.tabs.remove(tab.id);
-
-    const transactions = parseBiltCsv(csvData);
     if (transactions.length > 0) {
         reportProgress(options, 80, `Importing ${transactions.length} transactions`);
         console.log(`Bilt: importing ${transactions.length} transactions.`);

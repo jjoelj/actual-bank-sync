@@ -12,7 +12,10 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
         console.log("WF: already synced today, skipping.");
         return;
     }
-    const { startDate, endDate: today, isForced } = plan;
+    const { endDate: today, isForced } = plan;
+    const [y, m, d] = today.split("-").map(Number);
+    const maxStart = new Date(Date.UTC(y, m - 1 - 25, d)).toISOString().slice(0, 10);
+    const startDate = plan.startDate < maxStart ? maxStart : plan.startDate;
     console.log(`WF sync: ${startDate} → ${today}`);
     reportProgress(options, 15, "Waiting for Wells Fargo");
 
@@ -28,7 +31,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
         wfData = await pollForWFData(tab.id, (t, msg) => {
             reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
         });
-        console.log("WF download URL:", wfData.downloadUrl);
+        console.log("WF account ID:", wfData.accountId);
     } catch (err) {
         chrome.tabs.remove(tab.id);
         console.error("WF: login failed, giving up.");
@@ -45,7 +48,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
         const result = await chrome.tabs.sendMessage(tab.id, {
             type: "FETCH_WF_TRANSACTIONS",
             accountId: wfData.accountId,
-            downloadUrl: `https://connect.secure.wellsfargo.com/services${wfData.downloadUrl}`,
+            xatoken: wfData.xatoken,
             startDate: fromDate,
             endDate: toDate,
         });
@@ -102,7 +105,7 @@ function pollForWFData(tabId, onTick) {
                 const onWFPage = tab.url?.includes("wellsfargo.com") && (
                     tab.url.includes("accountsummary") ||
                     tab.url.includes("accountdetails") ||
-                    tab.url.includes("download-account-activity")
+                    tab.url.includes("download-accountactivity")
                 );
                 if (!onWFPage) {
                     dataPageStart = null;
@@ -150,21 +153,13 @@ function pollForWFData(tabId, onTick) {
                         }
                     }
 
-                } else if (wfState === "get-data" && tab.url?.includes("download-account-activity")) {
-                    const result = await chrome.scripting.executeScript({
-                        target: { tabId },
-                        world: "MAIN",
-                        func: () => {
-                            const data = window._wfPayload?.applicationData?.downloadAccountActivity;
-                            const accountId = data?.downloadAccountInfo?.allEligibleAccounts?.[0]?.id;
-                            const downloadUrl = data?.urls?.find(u => u.id === "downloadFile")?.url;
-                            return { accountId, downloadUrl };
-                        },
-                    });
-                    const { accountId, downloadUrl } = result?.[0]?.result || {};
-                    if (accountId && downloadUrl) {
+                } else if (wfState === "get-data" && tab.url?.includes("download-accountactivity")) {
+                    const urlObj = new URL(tab.url);
+                    const xatoken = urlObj.searchParams.get("_xa");
+                    const accountId = urlObj.searchParams.get("accountId");
+                    if (xatoken && accountId) {
                         clearInterval(interval);
-                        resolve({ accountId, downloadUrl });
+                        resolve({ accountId, xatoken });
                     }
                 }
             } catch {
@@ -181,20 +176,19 @@ function formatWFDate(isoStr) {
 
 function parseWFCsv(csv) {
     const lines = csv.trim().split("\n");
-    if (lines.length < 1) return [];
-
     const transactions = [];
 
     for (const line of lines) {
         const cols = parseCsvLine(line);
-        // "date","amount","*","","description"
+        // "DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"
         const date = cols[0]?.replace(/"/g, "").trim();
-        const amountStr = cols[1]?.replace(/"/g, "").trim();
-        const description = cols[4]?.replace(/"/g, "").trim();
+        const description = cols[1]?.replace(/"/g, "").trim();
+        const amountStr = cols[2]?.replace(/"/g, "").trim();
 
-        if (!date || !amountStr) continue;
+        if (!date || !amountStr || date === "DATE") continue;
 
         const raw = parseFloat(amountStr);
+        if (isNaN(raw)) continue;
         // WF: positive = payment/credit, negative = charge
         const amount = Math.round(raw * 100);
 

@@ -29,8 +29,6 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
         return;
     }
 
-    await closeExistingVenmoTabs();
-    await clearVenmoCookies();
     const tab = await openTabBackground("https://venmo.com");
     if (needsCash) reportProgress(options, "venmo-cash", 15, "Opening Venmo…");
     if (needsCredit) reportProgress(options, "venmo-credit", 15, "Opening Venmo…");
@@ -108,22 +106,6 @@ async function clearSyncError(key) {
     await chrome.storage.local.set({ syncErrors });
 }
 
-async function closeExistingVenmoTabs() {
-    const tabs = await chrome.tabs.query({ url: "*://*.venmo.com/*" });
-    for (const tab of tabs) {
-        await chrome.tabs.remove(tab.id);
-    }
-}
-
-async function clearVenmoCookies() {
-    const cookies = await chrome.cookies.getAll({ domain: ".venmo.com" });
-    for (const cookie of cookies) {
-        await chrome.cookies.remove({
-            url: `https://${cookie.domain.replace(/^\./, "")}${cookie.path}`,
-            name: cookie.name,
-        });
-    }
-}
 
 function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
     return new Promise((resolve, reject) => {
@@ -251,13 +233,14 @@ function parseVenmoCsv(csv, startDate, endDate) {
         const status = cols[4]?.trim();
         const note = cols[5]?.trim();
         const from = cols[6]?.trim();
+        const to = cols[7]?.trim();
         const destination = cols[15]?.trim();
         const amountRaw = cols[8]?.trim();
 
         if (!id || !datetime || !amountRaw) continue;
         if (status && status !== "Complete" && status !== "Issued") continue;
 
-        const amountMatch = amountRaw.match(/([+-])\s*\$\s*([\d.]+)/);
+        const amountMatch = amountRaw.replace(/,/g, "").match(/([+-])\s*\$\s*([\d.]+)/);
         if (!amountMatch) continue;
 
         const sign = amountMatch[1] === "+" ? 1 : -1;
@@ -267,8 +250,11 @@ function parseVenmoCsv(csv, startDate, endDate) {
         if (startDate && date < startDate) continue;
         if (endDate && date > endDate) continue;
 
-        const payee = type === "Payment" && sign === 1 ? from : destination || type;
-        const notes = type === "Payment" ? note : type;
+        let payee;
+        if (type === "Payment") payee = sign === -1 ? to : from;
+        else if (type === "Charge") payee = sign === -1 ? from : to;
+        else payee = destination || type;
+        const notes = type === "Payment" || type === "Charge" ? note : type;
 
         transactions.push({
             date,

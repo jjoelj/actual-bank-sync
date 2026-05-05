@@ -1,20 +1,26 @@
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "FETCH_WF_TRANSACTIONS") {
-        const { accountId, downloadUrl, startDate, endDate } = msg;
+        const { accountId, xatoken, startDate, endDate } = msg;
 
-        const formData = new FormData();
-        formData.append("accountId", accountId);
-        formData.append("fromDate", startDate);
-        formData.append("toDate", endDate);
-        formData.append("fileFormat", "commaDelimited");
+        const query = `\n{\n  downloadAccountData(downloadAccountDataRequest: {\n    accountId: "${accountId}",\n    types: [\n      {\n        fromDate: "${startDate}",\n        toDate: "${endDate}",\n        fileFormat: "commaDelimited",\n        type: ACTIVITY,\n\t      includePendingTransactions: false\n      }\n    ]\n  }) {\n    status\n    fileName\n    activities\n  }\n}`;
 
-        fetch(downloadUrl, {
+        fetch("https://connect.secure.wellsfargo.com/xapi/retailbanking/services/v1/graphql", {
             method: "POST",
-            body: formData,
+            headers: {
+                "content-type": "application/json",
+                "x-wf-dig-xatoken": xatoken,
+                "x-wf-request-date": new Date().toISOString().replace("Z", "-00:00"),
+                "x-correlation-id": crypto.randomUUID(),
+                "x-request-id": crypto.randomUUID(),
+            },
             credentials: "include",
+            body: JSON.stringify({ query }),
         })
-            .then(r => r.text())
-            .then(data => sendResponse({ data }))
+            .then(r => r.json())
+            .then(json => {
+                const activities = json?.data?.downloadAccountData?.activities ?? "";
+                sendResponse({ data: activities });
+            })
             .catch(err => sendResponse({ error: err.message }));
 
         return true;
