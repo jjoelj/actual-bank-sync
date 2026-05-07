@@ -1,4 +1,5 @@
-import { ACCOUNT_TYPES } from "./accounts.js";
+import { ACCOUNT_TYPES, BANK_LABELS } from "./accounts.js";
+import { pacificDate, offsetDate } from "./utils.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -8,22 +9,39 @@ const activeProgress = new Map();
 
 // ── Startup cleanup ───────────────────────────────────────────────────────────
 
+const KNOWN_LOCAL_KEYS = new Set([
+  "accountMappings", "addedAccountTypes",
+  "cachedActualAccounts", "cachedSofiAccounts", "cachedCapitalOneAccounts", "cachedWFAccounts",
+  "lastSyncTime", "lastCompletedSyncSessionId", "lastCompletedSyncSummary",
+  "activeSyncSessionId", "activeSyncSummary", "nextScheduledSyncAt", "syncFromDate",
+  "lastSyncDates", "lastSyncMetrics", "syncErrors",
+  "startingBalances", "cumulativeTxSums", "balanceCheckEndDates", "balanceDrifts",
+]);
+
+const PER_ACCOUNT_KEYS = [
+  "lastSyncDates", "lastSyncMetrics", "syncErrors",
+  "startingBalances", "cumulativeTxSums", "balanceCheckEndDates", "balanceDrifts",
+];
+
 function isValidKey(key) {
-  return key in ACCOUNT_TYPES || key.startsWith("sofi-");
+  return key in ACCOUNT_TYPES || key.startsWith("sofi-") || key.startsWith("capitalone-") || key.startsWith("wf-");
 }
 
 async function purgeStaleKeys() {
-  const data = await chrome.storage.local.get(["accountMappings", "lastSyncDates", "lastSyncCounts", "lastSyncMetrics", "syncErrors", "addedAccountTypes", "rowOrder"]);
-  const { accountMappings = {}, lastSyncDates = {}, lastSyncCounts = {}, lastSyncMetrics = {}, syncErrors = {}, addedAccountTypes = [], rowOrder = [] } = data;
+  const all = await chrome.storage.local.get(null);
+  const { accountMappings = {}, addedAccountTypes = [] } = all;
+
+  const stale = Object.keys(all).filter(k => !KNOWN_LOCAL_KEYS.has(k));
+  if (stale.length) await chrome.storage.local.remove(stale);
+
+  const mapped = (key) => key in accountMappings;
 
   await chrome.storage.local.set({
     accountMappings:   Object.fromEntries(Object.entries(accountMappings).filter(([k]) => isValidKey(k))),
-    lastSyncDates:     Object.fromEntries(Object.entries(lastSyncDates).filter(([k]) => isValidKey(k))),
-    lastSyncCounts:    Object.fromEntries(Object.entries(lastSyncCounts).filter(([k]) => isValidKey(k))),
-    lastSyncMetrics:   Object.fromEntries(Object.entries(lastSyncMetrics).filter(([k]) => isValidKey(k))),
-    syncErrors:        Object.fromEntries(Object.entries(syncErrors).filter(([k]) => isValidKey(k))),
     addedAccountTypes: addedAccountTypes.filter(t => t in ACCOUNT_TYPES),
-    rowOrder:          rowOrder.filter(k => isValidKey(k)),
+    ...Object.fromEntries(
+      PER_ACCOUNT_KEYS.map(k => [k, Object.fromEntries(Object.entries(all[k] ?? {}).filter(([sk]) => mapped(sk)))])
+    ),
   });
 }
 
@@ -46,8 +64,8 @@ async function init() {
   const { lastSyncTime } = await chrome.storage.local.get("lastSyncTime");
   if (lastSyncTime) showStatus(`Last synced ${formatDateTime(lastSyncTime)}`, "");
 
-  const { cachedActualAccounts, accountMappings = {}, addedAccountTypes = [], rowOrder = [] } =
-    await chrome.storage.local.get(["cachedActualAccounts", "accountMappings", "addedAccountTypes", "rowOrder"]);
+  const { cachedActualAccounts, accountMappings = {}, addedAccountTypes = [] } =
+    await chrome.storage.local.get(["cachedActualAccounts", "accountMappings", "addedAccountTypes"]);
 
   if (cachedActualAccounts) actualAccounts = cachedActualAccounts;
 
@@ -56,20 +74,25 @@ async function init() {
 
   for (const type of addedAccountTypes) {
     if (type === "sofi-banking") {
-      const { cachedBankAccounts = [] } = await chrome.storage.local.get("cachedBankAccounts");
-      addSoFiBankingRows(cachedBankAccounts, accountMappings);
+      const { cachedSofiAccounts = [] } = await chrome.storage.local.get("cachedSofiAccounts");
+      addSoFiBankingRows(cachedSofiAccounts, accountMappings);
+    } else if (type === "capitalone-cards") {
+      const { cachedCapitalOneAccounts = [] } = await chrome.storage.local.get("cachedCapitalOneAccounts");
+      addCapitalOneCards(cachedCapitalOneAccounts, accountMappings);
+    } else if (type === "wf-cards") {
+      const { cachedWFAccounts = [] } = await chrome.storage.local.get("cachedWFAccounts");
+      addWFCards(cachedWFAccounts, accountMappings);
     } else {
       addAccountRow(type, accountMappings);
     }
   }
-
-  applyRowOrder(rowOrder);
 
   showView(cachedActualAccounts?.length > 0 ? "accounts" : "settings");
 
   populateDropdown();
   updateDropdownOptions();
   updateUsedOptions();
+  sortAccountRows();
   await renderSyncStatus();
   await renderSyncSummary();
   updateSyncBtn();
@@ -153,21 +176,11 @@ function updateSyncBtn() {
   const hasMapping = Array.from(document.querySelectorAll("select[data-mapping-key]")).some(sel => sel.value);
   const syncFromDate = $("sync-from-date").value;
   $("sync-btn").style.display = (hasMapping && syncFromDate) ? "block" : "none";
-  $("force-sync-btn").style.display = hasMapping ? "block" : "none";
   if (hasMapping) renderSyncStatus();
 }
 
 $("sync-btn").addEventListener("click", async () => {
   await runSyncFromPopup({}, "Syncing…");
-});
-
-$("force-sync-btn").addEventListener("click", async () => {
-  await runSyncFromPopup({
-    forceDays: 1,
-    forceKeys: Array.from(document.querySelectorAll("select[data-mapping-key]"))
-      .filter(sel => sel.value)
-      .map(sel => sel.dataset.mappingKey),
-  }, "Force syncing the last day…");
 });
 
 $("sync-from-date").addEventListener("change", () => {
@@ -180,10 +193,11 @@ $("sync-from-date").addEventListener("change", () => {
 function populateDropdown() {
   const dropdown = $("account-type-dropdown");
   dropdown.innerHTML = "";
-  for (const [type, { label }] of Object.entries(ACCOUNT_TYPES)) {
+  const sorted = Object.entries(BANK_LABELS).sort(([, a], [, b]) => a.localeCompare(b));
+  for (const [bankId, label] of sorted) {
     const div = document.createElement("div");
     div.className = "dropdown-option";
-    div.dataset.type = type;
+    div.dataset.bank = bankId;
     div.textContent = label;
     dropdown.appendChild(div);
   }
@@ -205,26 +219,27 @@ document.addEventListener("click", () => {
 $("account-type-dropdown").addEventListener("click", async (e) => {
   const option = e.target.closest(".dropdown-option");
   if (!option) return;
-  const type = option.dataset.type;
   $("account-type-dropdown").classList.remove("open");
   $("accounts-view").style.paddingBottom = "";
-
-  if (type === "sofi-banking") {
-    await addSoFiBanking();
-  } else {
-    addAccountRow(type, {});
-    persistAddedTypes();
-  }
+  await addBank(option.dataset.bank);
+  sortAccountRows();
   updateDropdownOptions();
 });
 
 function updateDropdownOptions() {
   let anyVisible = false;
   for (const option of document.querySelectorAll(".dropdown-option")) {
-    const type = option.dataset.type;
-    const hidden = addedTypes.has(type);
-    option.style.display = hidden ? "none" : "";
-    if (!hidden) anyVisible = true;
+    const bankId = option.dataset.bank;
+    let allAdded;
+    if (bankId in BANK_FETCH_FNS) {
+      allAdded = !!document.querySelector(`.bank-group[data-bank="${bankId}"]`);
+    } else {
+      allAdded = Object.keys(ACCOUNT_TYPES)
+        .filter(k => ACCOUNT_TYPES[k].bank === bankId)
+        .every(k => addedTypes.has(k));
+    }
+    option.style.display = allAdded ? "none" : "";
+    if (!allAdded) anyVisible = true;
   }
   $("add-account-btn").style.display = anyVisible ? "" : "none";
 }
@@ -236,7 +251,7 @@ async function addSoFiBanking() {
   try {
     const res = await sendMessage({ type: "GET_SOFI_ACCOUNTS" });
     if (res.error) throw new Error(res.error);
-    await chrome.storage.local.set({ cachedBankAccounts: res.accounts });
+    await chrome.storage.local.set({ cachedSofiAccounts: res.accounts });
     const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
     addSoFiBankingRows(res.accounts, accountMappings);
     persistAddedTypes();
@@ -246,11 +261,81 @@ async function addSoFiBanking() {
   }
 }
 
+async function addBank(bankId) {
+  const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+  if (bankId === "sofi") {
+    await addSoFiBanking();
+    return;
+  }
+  if (bankId === "capitalone") {
+    await addCapitalOneBanking();
+    return;
+  }
+  if (bankId === "wf") {
+    await addWFBanking();
+    return;
+  }
+  const keys = Object.keys(ACCOUNT_TYPES).filter(k => ACCOUNT_TYPES[k].bank === bankId && !ACCOUNT_TYPES[k].optional && !addedTypes.has(k));
+  for (const key of keys) addAccountRow(key, accountMappings);
+  if (keys.length) persistAddedTypes();
+}
+
 function addSoFiBankingRows(bankAccounts, savedMappings) {
   addedTypes.add("sofi-banking");
   for (const bank of bankAccounts || []) {
     const key = `sofi-${bank.id}`;
-    addMappingRow(key, `SoFi ${bank.type.replace("Account", "").trim()}`, savedMappings[key]);
+    const label = bank.type === "Vault"
+      ? (bank.name ? `${bank.name} Vault` : "Vault")
+      : bank.type.replace("Account", "").trim();
+    addMappingRow(key, label, savedMappings[key]);
+  }
+}
+
+async function addCapitalOneBanking() {
+  showStatus("Loading Capital One accounts...", "");
+  try {
+    const res = await sendMessage({ type: "GET_CAPITALONE_ACCOUNTS" });
+    if (res.error) throw new Error(res.error);
+    await chrome.storage.local.set({ cachedCapitalOneAccounts: res.accounts });
+    const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+    addCapitalOneCards(res.accounts, accountMappings);
+    persistAddedTypes();
+    showStatus("Capital One accounts loaded.", "ok");
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, "error");
+  }
+}
+
+function addCapitalOneCards(bankAccounts, savedMappings) {
+  addedTypes.add("capitalone-cards");
+  for (const account of bankAccounts || []) {
+    const key = `capitalone-${account.id}`;
+    const label = `${account.name} (${account.lastFour})`;
+    addMappingRow(key, label, savedMappings[key]);
+  }
+}
+
+async function addWFBanking() {
+  showStatus("Loading Wells Fargo accounts...", "");
+  try {
+    const res = await sendMessage({ type: "GET_WF_ACCOUNTS" });
+    if (res.error) throw new Error(res.error);
+    await chrome.storage.local.set({ cachedWFAccounts: res.accounts });
+    const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+    addWFCards(res.accounts, accountMappings);
+    persistAddedTypes();
+    showStatus("Wells Fargo accounts loaded.", "ok");
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, "error");
+  }
+}
+
+function addWFCards(bankAccounts, savedMappings) {
+  addedTypes.add("wf-cards");
+  for (const account of bankAccounts || []) {
+    const key = `wf-${account.id}`;
+    const label = `${account.name} (${account.lastFour})`;
+    addMappingRow(key, label, savedMappings[key]);
   }
 }
 
@@ -259,8 +344,82 @@ function addAccountRow(type, savedMappings) {
   addMappingRow(type, ACCOUNT_TYPES[type].label, savedMappings[type]);
 }
 
-let dragSrcKey = null;
-let lastDragEnterKey = null;
+function getBankForKey(key) {
+  if (key.startsWith("sofi-")) return "sofi";
+  if (key.startsWith("capitalone-")) return "capitalone";
+  if (key.startsWith("wf-")) return "wf";
+  return ACCOUNT_TYPES[key]?.bank ?? null;
+}
+
+const BANK_FETCH_FNS = {
+  sofi:       addSoFiBanking,
+  capitalone: addCapitalOneBanking,
+  wf:         addWFBanking,
+};
+
+function getOrCreateBankGroup(bankId) {
+  const existing = document.querySelector(`.bank-group[data-bank="${bankId}"]`);
+  if (existing) return existing;
+  const group = document.createElement("div");
+  group.className = "bank-group";
+  group.dataset.bank = bankId;
+  const header = document.createElement("div");
+  header.className = "bank-group-header";
+
+  const nameEl = document.createElement("span");
+  nameEl.textContent = BANK_LABELS[bankId] ?? bankId;
+  header.appendChild(nameEl);
+
+  const fetchFn = BANK_FETCH_FNS[bankId];
+  if (fetchFn) {
+    const fetchBtn = document.createElement("button");
+    fetchBtn.type = "button";
+    fetchBtn.className = "bank-fetch-btn";
+    fetchBtn.textContent = "↻";
+    fetchBtn.title = "Fetch accounts";
+    fetchBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      fetchFn();
+    });
+    header.appendChild(fetchBtn);
+  }
+
+  group.appendChild(header);
+  const addRow = document.createElement("div");
+  addRow.className = "bank-add-row";
+  group.appendChild(addRow);
+  $("accounts-list").appendChild(group);
+  return group;
+}
+
+function updateBankGroupAddOptions(bankId) {
+  const group = document.querySelector(`.bank-group[data-bank="${bankId}"]`);
+  if (!group) return;
+  const container = group.querySelector(".bank-add-row");
+  if (!container) return;
+
+  const addableKeys = bankId === "sofi"
+    ? ["sofi-credit"]
+    : Object.keys(ACCOUNT_TYPES).filter(k => ACCOUNT_TYPES[k].bank === bankId);
+
+  const missing = addableKeys.filter(k => !addedTypes.has(k));
+  container.innerHTML = "";
+
+  for (const key of missing) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "bank-add-chip";
+    btn.textContent = `+ ${ACCOUNT_TYPES[key].label}`;
+    btn.addEventListener("click", async () => {
+      const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+      addAccountRow(key, accountMappings);
+      persistAddedTypes();
+      updateBankGroupAddOptions(bankId);
+      updateDropdownOptions();
+    });
+    container.appendChild(btn);
+  }
+}
 
 function addMappingRow(mappingKey, label, selectedId) {
   if (document.querySelector(`select[data-mapping-key="${mappingKey}"]`)) return;
@@ -269,12 +428,6 @@ function addMappingRow(mappingKey, label, selectedId) {
   row.className = "account-row";
   row.dataset.rowKey = mappingKey;
   row.dataset.sourceLabel = label;
-  row.draggable = true;
-
-  const handle = document.createElement("div");
-  handle.className = "drag-handle";
-  handle.textContent = "⠿";
-  handle.title = "Drag to reorder";
 
   const info = document.createElement("div");
   info.className = "account-info";
@@ -329,21 +482,6 @@ function addMappingRow(mappingKey, label, selectedId) {
     setMappingEditorState(row, true);
   });
 
-  const forceSyncBtn = document.createElement("button");
-  forceSyncBtn.type = "button";
-  forceSyncBtn.className = "icon-btn force-sync";
-  forceSyncBtn.textContent = "↺";
-  forceSyncBtn.title = "Force sync last day";
-  forceSyncBtn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    await runSyncFromPopup({
-      targetKeys: [mappingKey],
-      forceKeys: [mappingKey],
-      forceDays: 1,
-    }, `Force syncing the last day for ${row.querySelector(".account-label")?.textContent || label}…`);
-  });
-
   select.addEventListener("change", () => {
     saveMappings();
     updateUsedOptions();
@@ -363,100 +501,70 @@ function addMappingRow(mappingKey, label, selectedId) {
     e.stopPropagation();
     row.remove();
     const type = getTypeForKey(mappingKey);
-    if (type) addedTypes.delete(type);
+    if (type === "sofi-banking") {
+      const hasMoreBankingRows = !!document.querySelector('.account-row[data-row-key^="sofi-"]:not([data-row-key="sofi-credit"])');
+      if (!hasMoreBankingRows) addedTypes.delete("sofi-banking");
+    } else if (type === "capitalone-cards") {
+      const hasMoreRows = !!document.querySelector('.account-row[data-row-key^="capitalone-"]');
+      if (!hasMoreRows) addedTypes.delete("capitalone-cards");
+    } else if (type === "wf-cards") {
+      const hasMoreRows = !!document.querySelector('.account-row[data-row-key^="wf-"]');
+      if (!hasMoreRows) addedTypes.delete("wf-cards");
+    } else if (type) {
+      addedTypes.delete(type);
+    }
+    const bank = getBankForKey(mappingKey);
+    if (bank) {
+      const group = document.querySelector(`.bank-group[data-bank="${bank}"]`);
+      if (group) {
+        if (group.querySelectorAll(".account-row").length === 0) {
+          group.remove();
+        } else {
+          updateBankGroupAddOptions(bank);
+        }
+      }
+    }
     updateDropdownOptions();
     persistAddedTypes();
-    const [{ accountMappings = {} }, { lastSyncDates = {} }, { lastSyncMetrics = {} }, { syncErrors = {} }, { rowOrder = [] }] = await Promise.all([
+    const [
+      { accountMappings = {} }, { lastSyncDates = {} }, { lastSyncMetrics = {} }, { syncErrors = {} },
+      { startingBalances = {} }, { cumulativeTxSums = {} }, { balanceCheckEndDates = {} }, { balanceDrifts = {} },
+    ] = await Promise.all([
       chrome.storage.local.get("accountMappings"),
       chrome.storage.local.get("lastSyncDates"),
       chrome.storage.local.get("lastSyncMetrics"),
       chrome.storage.local.get("syncErrors"),
-      chrome.storage.local.get("rowOrder"),
+      chrome.storage.local.get("startingBalances"),
+      chrome.storage.local.get("cumulativeTxSums"),
+      chrome.storage.local.get("balanceCheckEndDates"),
+      chrome.storage.local.get("balanceDrifts"),
     ]);
-    delete accountMappings[mappingKey];
-    delete lastSyncDates[mappingKey];
-    delete lastSyncMetrics[mappingKey];
-    delete syncErrors[mappingKey];
-    await chrome.storage.local.set({ accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, rowOrder: rowOrder.filter(k => k !== mappingKey) });
+    for (const obj of [accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, startingBalances, cumulativeTxSums, balanceCheckEndDates, balanceDrifts]) {
+      delete obj[mappingKey];
+    }
+    await chrome.storage.local.set({ accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, startingBalances, cumulativeTxSums, balanceCheckEndDates, balanceDrifts });
     await renderSyncSummary();
     updateSyncBtn();
   });
 
-  row.appendChild(handle);
   row.appendChild(info);
   row.appendChild(mappingDisplay);
   row.appendChild(select);
-  row.appendChild(forceSyncBtn);
   row.appendChild(editBtn);
   row.appendChild(removeBtn);
 
-  row.addEventListener("dragstart", (e) => {
-    dragSrcKey = mappingKey;
-    lastDragEnterKey = null;
-    e.dataTransfer.effectAllowed = "move";
-    requestAnimationFrame(() => row.classList.add("dragging"));
-  });
-
-  row.addEventListener("dragend", () => {
-    row.classList.remove("dragging");
-    dragSrcKey = null;
-    lastDragEnterKey = null;
-  });
-
-  row.addEventListener("dragenter", async (e) => {
-    e.preventDefault();
-    if (!dragSrcKey || dragSrcKey === mappingKey) return;
-    if (lastDragEnterKey === mappingKey) return;
-    lastDragEnterKey = mappingKey;
-
-    const list = $("accounts-list");
-    const rows = Array.from(list.querySelectorAll(".account-row"));
-    const src = list.querySelector(`[data-row-key="${dragSrcKey}"]`);
-    const srcIdx = rows.indexOf(src);
-    const tgtIdx = rows.indexOf(row);
-
-    const srcTop = src.getBoundingClientRect().top;
-    const tgtTop = row.getBoundingClientRect().top;
-
-    if (srcIdx < tgtIdx) list.insertBefore(row, src);
-    else list.insertBefore(src, row);
-
-    const srcDelta = srcTop - src.getBoundingClientRect().top;
-    const tgtDelta = tgtTop - row.getBoundingClientRect().top;
-
-    for (const [el, delta] of [[src, srcDelta], [row, tgtDelta]]) {
-      el.style.transition = "none";
-      el.style.transform = `translateY(${delta}px)`;
-      el.getBoundingClientRect(); // force reflow so transition fires
-      el.style.transition = "transform 0.15s ease";
-      el.style.transform = "";
-    }
-  });
-
-  row.addEventListener("dragover", (e) => e.preventDefault());
-
-  row.addEventListener("drop", async (e) => {
-    e.preventDefault();
-    const newOrder = Array.from($("accounts-list").querySelectorAll(".account-row")).map(r => r.dataset.rowKey);
-    await chrome.storage.local.set({ rowOrder: newOrder });
-  });
-
-  $("accounts-list").appendChild(row);
+  const bank = getBankForKey(mappingKey);
+  const container = bank ? getOrCreateBankGroup(bank) : $("accounts-list");
+  container.appendChild(row);
   syncMappingDisplay(row);
   updateUsedOptions();
-}
-
-function applyRowOrder(rowOrder) {
-  if (!rowOrder?.length) return;
-  const list = $("accounts-list");
-  for (const key of rowOrder) {
-    const row = list.querySelector(`[data-row-key="${key}"]`);
-    if (row) list.appendChild(row);
-  }
+  if (bank) updateBankGroupAddOptions(bank);
 }
 
 function getTypeForKey(mappingKey) {
   if (mappingKey.startsWith("sofi-") && mappingKey !== "sofi-credit") return "sofi-banking";
+  if (mappingKey.startsWith("capitalone-")) return "capitalone-cards";
+  if (mappingKey.startsWith("wf-")) return "wf-cards";
   return ACCOUNT_TYPES[mappingKey] ? mappingKey : null;
 }
 
@@ -539,8 +647,8 @@ async function saveMappings() {
 // ── Sync status ───────────────────────────────────────────────────────────────
 
 async function renderSyncStatus() {
-  const { lastSyncDates = {}, lastSyncCounts = {}, lastSyncMetrics = {}, syncErrors = {} } =
-    await chrome.storage.local.get(["lastSyncDates", "lastSyncCounts", "lastSyncMetrics", "syncErrors"]);
+  const { lastSyncDates = {}, lastSyncMetrics = {}, syncErrors = {}, startingBalances = {}, cumulativeTxSums = {} } =
+    await chrome.storage.local.get(["lastSyncDates", "lastSyncMetrics", "syncErrors", "startingBalances", "cumulativeTxSums"]);
 
   for (const el of document.querySelectorAll("[id^='sub-']")) {
     const key = el.id.replace("sub-", "");
@@ -557,18 +665,17 @@ async function renderSyncStatus() {
     } else {
       const date = lastSyncDates[key];
       if (date) {
-        const count = lastSyncCounts[key];
+        const count = lastSyncMetrics[key]?.count;
         const countStr = formatTransactionCount(count);
         const statusText = countStr ? `Synced ${formatDate(date)} • ${countStr}` : `Synced ${formatDate(date)}`;
         el.className = "account-sub synced";
         row?.classList.remove("is-syncing");
-        const net = lastSyncMetrics[key]?.net;
-        if (net) {
-          const sign = net > 0 ? "+" : "−";
-          const amountHtml = net < 0
-            ? `<span class="amount-neg">${sign}${escapeHtml(formatCurrency(Math.abs(net)))}</span>`
-            : `${sign}${escapeHtml(formatCurrency(net))}`;
-          el.innerHTML = `${escapeHtml(statusText)} • ${amountHtml}`;
+        const balance = startingBalances[key] != null ? startingBalances[key] + (cumulativeTxSums[key] ?? 0) : null;
+        if (balance != null) {
+          const balanceHtml = balance < 0
+            ? `<span class="amount-neg">${escapeHtml(formatCurrency(balance))}</span>`
+            : escapeHtml(formatCurrency(balance));
+          el.innerHTML = `${escapeHtml(statusText)} • ${balanceHtml}`;
         } else {
           el.textContent = statusText;
         }
@@ -580,8 +687,6 @@ async function renderSyncStatus() {
     }
   }
 
-  sortAccountRows(lastSyncMetrics);
-
   const anyUnsynced = Array.from(document.querySelectorAll("select[data-mapping-key]"))
     .some(sel => sel.value && !lastSyncDates[sel.dataset.mappingKey]);
   $("sync-from-section").style.display = anyUnsynced ? "block" : "none";
@@ -589,35 +694,35 @@ async function renderSyncStatus() {
   await renderSyncSummary();
 }
 
-function metricSortKey(key, metrics) {
-  if (activeProgress.has(key)) return -3e15;
-  const net = metrics?.net;
-  if (!net) return 2e15;
-  if (net < 0) return net;
-  return 1e15 - net;
-}
-
-function sortAccountRows(lastSyncMetrics) {
+function sortAccountRows() {
   const list = $("accounts-list");
   if (!list) return;
-  const rows = Array.from(list.querySelectorAll(".account-row"));
-  if (rows.length < 2) return;
-  rows.sort((a, b) => metricSortKey(a.dataset.rowKey, lastSyncMetrics[a.dataset.rowKey]) - metricSortKey(b.dataset.rowKey, lastSyncMetrics[b.dataset.rowKey]));
-  for (const row of rows) list.appendChild(row);
+  const groups = Array.from(list.querySelectorAll(":scope > .bank-group"));
+  if (groups.length < 2) return;
+  groups.sort((a, b) => {
+    const la = (BANK_LABELS[a.dataset.bank] ?? a.dataset.bank).toLowerCase();
+    const lb = (BANK_LABELS[b.dataset.bank] ?? b.dataset.bank).toLowerCase();
+    return la.localeCompare(lb);
+  });
+  for (const group of groups) list.appendChild(group);
 }
 
 async function renderSyncSummary() {
   const {
     accountMappings = {},
     lastSyncDates = {},
-    lastSyncMetrics = {},
+    startingBalances = {},
+    cumulativeTxSums = {},
     activeSyncSummary = null,
+    lastCompletedSyncSummary = null,
     nextScheduledSyncAt = null,
   } = await chrome.storage.local.get([
     "accountMappings",
     "lastSyncDates",
-    "lastSyncMetrics",
+    "startingBalances",
+    "cumulativeTxSums",
     "activeSyncSummary",
+    "lastCompletedSyncSummary",
     "nextScheduledSyncAt",
   ]);
 
@@ -633,34 +738,46 @@ async function renderSyncSummary() {
     ? `Next auto sync ${formatDateTime(nextScheduledSyncAt)}`
     : "Auto sync not scheduled";
 
+  // Net worth — always show if we have balance data
+  const balanceKeys = mappedKeys.filter(k => startingBalances[k] != null);
+  const netWorthRow = $("summary-net-worth-row");
+  if (balanceKeys.length > 0) {
+    const netWorth = balanceKeys.reduce((sum, k) => sum + startingBalances[k] + (cumulativeTxSums[k] ?? 0), 0);
+    $("summary-net-worth").textContent = formatCurrency(netWorth);
+    $("summary-net-worth").className = netWorth < 0 ? "amount-neg" : "";
+
+    const deltaEl = $("summary-net-worth-delta");
+    const net = lastCompletedSyncSummary
+      ? (lastCompletedSyncSummary.inflow || 0) - (lastCompletedSyncSummary.outflow || 0)
+      : null;
+    if (net != null && net !== 0) {
+      deltaEl.textContent = (net > 0 ? "▲ " : "▼ ") + formatCurrency(Math.abs(net));
+      deltaEl.className = net > 0 ? "delta-up" : "delta-down";
+    } else {
+      deltaEl.textContent = "";
+      deltaEl.className = "";
+    }
+
+    netWorthRow.style.display = "";
+  } else {
+    netWorthRow.style.display = "none";
+  }
+
   const liveSummary = activeSyncSummary?.sessionId && (activeSyncSummary.syncedAccounts || activeSyncSummary.transactionCount) ? activeSyncSummary : null;
 
   if (liveSummary) {
     $("summary-accounts").textContent = `${liveSummary.syncedAccounts || 0} accounts done`;
     $("summary-transactions").textContent = `${liveSummary.transactionCount || 0} transactions added`;
-    $("summary-cashflow").innerHTML = formatCashflowSummary(liveSummary.inflow || 0, liveSummary.outflow || 0);
+    $("summary-transactions").style.display = "";
   } else {
     const syncedAccounts = mappedKeys.filter(k => lastSyncDates[k]).length;
-    if (syncedAccounts > 0) {
-      const totals = mappedKeys.reduce((acc, k) => {
-        const m = lastSyncMetrics[k];
-        if (!m) return acc;
-        return {
-          transactionCount: acc.transactionCount + (m.count || 0),
-          inflow: acc.inflow + (m.inflow || 0),
-          outflow: acc.outflow + (m.outflow || 0),
-        };
-      }, { transactionCount: 0, inflow: 0, outflow: 0 });
-      $("summary-accounts").textContent = `${syncedAccounts} accounts synced`;
-      $("summary-transactions").textContent = `${totals.transactionCount} transactions added`;
-      $("summary-cashflow").innerHTML = formatCashflowSummary(totals.inflow, totals.outflow);
-    } else {
-      $("summary-accounts").textContent = `${mappedKeys.length} mapped`;
-      $("summary-transactions").textContent = "No recent sync run";
-      $("summary-cashflow").innerHTML = "";
-    }
+    $("summary-accounts").textContent = syncedAccounts > 0
+      ? `${syncedAccounts} account${syncedAccounts === 1 ? "" : "s"} synced`
+      : `${mappedKeys.length} mapped`;
+    $("summary-transactions").textContent = "";
+    $("summary-transactions").style.display = "none";
   }
-  summaryEl.style.display = "grid";
+  summaryEl.style.display = "flex";
 }
 
 function updateSyncFromControl(anyUnsynced) {
@@ -670,9 +787,7 @@ function updateSyncFromControl(anyUnsynced) {
 }
 
 function formatDate(isoStr) {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (isoStr === yesterday.toISOString().split("T")[0]) return "today";
+  if (isoStr === offsetDate(pacificDate(new Date()), -1)) return "today";
   const [year, month, day] = isoStr.split("-");
   return new Date(year, month - 1, day).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
@@ -699,24 +814,6 @@ function formatCurrency(cents) {
   }).format((cents || 0) / 100);
 }
 
-function formatCashflowSummary(inflow, outflow) {
-    const net = inflow - outflow;
-    const parts = [];
-    if (inflow > 0) {
-      parts.push(`<span class="summary-flow income"><span class="summary-flow-label">In</span><span>+${escapeHtml(formatCurrency(inflow))}</span></span>`);
-    }
-    if (outflow > 0) {
-      parts.push(`<span class="summary-flow outflow"><span class="summary-flow-label">Out</span><span>-${escapeHtml(formatCurrency(outflow))}</span></span>`);
-    }
-  if (inflow > 0 || outflow > 0) {
-      const prefix = net >= 0 ? "+" : "-";
-      parts.push(`<span class="summary-flow net"><span class="summary-flow-label">Net</span><span>${prefix}${escapeHtml(formatCurrency(Math.abs(net)))}</span></span>`);
-    }
-  if (!parts.length) {
-      parts.push('<span class="summary-flow empty">No cash flow</span>');
-    }
-  return parts.join("");
-}
 
 function escapeHtml(value) {
   return String(value)
@@ -749,8 +846,8 @@ function showStatus(msg, type) {
 
 function applyProgressState(row, key, progress) {
   if (!row) return;
-  const textEl = row.querySelector(`#sub-${key}`);
-  const barEl = row.querySelector(`#progress-${key}`);
+  const textEl = document.getElementById(`sub-${key}`);
+  const barEl = document.getElementById(`progress-${key}`);
   row.classList.add("is-syncing");
   if (textEl) {
     const percentLabel = typeof progress.percent === "number" ? ` ${progress.percent}%` : "";
@@ -764,10 +861,7 @@ function applyProgressState(row, key, progress) {
 
 async function runSyncFromPopup(options, pendingMessage) {
   const syncBtn = $("sync-btn");
-  const forceSyncBtn = $("force-sync-btn");
   syncBtn.disabled = true;
-  forceSyncBtn.disabled = true;
-  for (const btn of document.querySelectorAll(".force-sync")) btn.disabled = true;
 
   showStatus(pendingMessage, "");
   const res = await sendMessage({ type: "RUN_SYNC", options });
@@ -775,16 +869,10 @@ async function runSyncFromPopup(options, pendingMessage) {
     showStatus(`Sync failed: ${res.error}`, "error");
   } else {
     const { lastSyncTime } = await chrome.storage.local.get("lastSyncTime");
-    if (options.forceDays) {
-      showStatus(`Forced last-day sync finished ${lastSyncTime ? formatDateTime(lastSyncTime) : ""}`.trim(), "ok");
-    } else if (lastSyncTime) {
-      showStatus(`Last synced ${formatDateTime(lastSyncTime)}`, "");
-    }
+    if (lastSyncTime) showStatus(`Last synced ${formatDateTime(lastSyncTime)}`, "");
   }
 
   syncBtn.disabled = false;
-  forceSyncBtn.disabled = false;
-  for (const btn of document.querySelectorAll(".force-sync")) btn.disabled = false;
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -802,7 +890,6 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (msg.message != null) {
       activeProgress.set(msg.key, { percent: msg.percent ?? 0, message: msg.message });
       applyProgressState(row, msg.key, activeProgress.get(msg.key));
-      sortAccountRows({});
       renderSyncSummary();
     } else {
       activeProgress.delete(msg.key);
@@ -810,6 +897,29 @@ chrome.runtime.onMessage.addListener((msg) => {
       renderSyncStatus();
       renderSyncSummary();
     }
+  }
+});
+
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local") return;
+  const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+  if (changes.cachedSofiAccounts) {
+    addSoFiBankingRows(changes.cachedSofiAccounts.newValue || [], accountMappings);
+    persistAddedTypes();
+    await renderSyncStatus();
+    updateSyncBtn();
+  }
+  if (changes.cachedCapitalOneAccounts) {
+    addCapitalOneCards(changes.cachedCapitalOneAccounts.newValue || [], accountMappings);
+    persistAddedTypes();
+    await renderSyncStatus();
+    updateSyncBtn();
+  }
+  if (changes.cachedWFAccounts) {
+    addWFCards(changes.cachedWFAccounts.newValue || [], accountMappings);
+    persistAddedTypes();
+    await renderSyncStatus();
+    updateSyncBtn();
   }
 });
 

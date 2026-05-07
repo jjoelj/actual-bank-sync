@@ -1,8 +1,8 @@
-import { getSyncPlan, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
+import { getSyncPlan, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
 
 export async function syncTarget(settings, accountMappings, accountKey, options = {}) {
     console.log("Target: starting");
-    const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
+    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
     const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
     if (!plan) {
         console.warn("Target: no sync start date configured, skipping.");
@@ -12,7 +12,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
         console.log("Target: already synced today, skipping.");
         return;
     }
-    const { startDate, endDate: today, isForced } = plan;
+    const { startDate, endDate: today } = plan;
     console.log(`Target sync: ${startDate} → ${today}`);
     reportProgress(options, 15, "Waiting for Target");
 
@@ -35,6 +35,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
     }
 
     let transactions;
+    let balance = null;
     try {
         reportProgress(options, 55, "Fetching transactions");
         const result = await chrome.tabs.sendMessage(tab.id, {
@@ -46,6 +47,17 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
         });
         if (result.error) throw new Error(result.error);
         transactions = parseTargetTransactions(result.data);
+
+        const balanceResult = await chrome.tabs.sendMessage(tab.id, {
+            type: "FETCH_TARGET_BALANCE",
+            csrfToken: targetData.csrfToken,
+            bankId: targetData.bankId,
+        });
+        if (balanceResult.error) {
+            console.warn("Target: failed to get balance:", balanceResult.error);
+        } else {
+            balance = balanceResult.balance;
+        }
     } catch (err) {
         console.error("Target fetch failed:", err.message);
         chrome.tabs.remove(tab.id);
@@ -54,6 +66,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
 
     chrome.tabs.remove(tab.id);
 
+    const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
     try {
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
@@ -62,14 +75,22 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
         } else {
             console.log("Target: no new transactions.");
         }
-        await updateLastSyncCount(accountKey, transactions.length);
-        await updateLastSyncMetrics(accountKey, transactions);
+        await updateLastSyncStats(accountKey, transactions);
+
+        if (balance != null) {
+            try {
+                await applyStartingBalance("Target", accountKey, { settings, accountId: actualAccountId, transactions, accountBalance: -balance, isFirstSync, startDate, importedId: "target-starting-balance" });
+            } catch (err) {
+                console.warn("Target: failed to verify starting balance:", err.message);
+            }
+        }
+
         reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("Target import failed:", err.message);
     }
 
-    if (!isForced) await updateLastSyncDate(accountKey, today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 function pollForTargetData(tabId, onTick) {
@@ -144,8 +165,7 @@ function parseTargetTransactions(data) {
         if (tx.transactionAmount === 0) return false;
         return true;
     }).map(tx => {
-        const isCredit = tx.transactionCode?.display === "Credit" || tx.transactionCode?.display === "Payment";
-        const amount = Math.round(tx.transactionAmount * 100) * (isCredit ? 1 : -1);
+        const amount = Math.round(tx.transactionAmount * 100) * -1;
 
         return {
             date: tx.transactionDate,

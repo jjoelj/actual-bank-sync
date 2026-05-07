@@ -1,18 +1,20 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
+import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
 
 export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
     console.log("Wells Fargo: starting");
-    const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
+    const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
+    let plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
     if (!plan) {
         console.warn("WF: no sync start date configured, skipping.");
         return;
     }
+    if (isFirstSync) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
     if (!plan.shouldSync) {
         console.log("WF: already synced today, skipping.");
         return;
     }
-    const { endDate: today, isForced } = plan;
+    const { endDate: today } = plan;
     const [y, m, d] = today.split("-").map(Number);
     const maxStart = new Date(Date.UTC(y, m - 1 - 25, d)).toISOString().slice(0, 10);
     const startDate = plan.startDate < maxStart ? maxStart : plan.startDate;
@@ -26,9 +28,11 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
 
+    const wfAccountId = accountKey.slice("wf-".length);
+
     let wfData;
     try {
-        wfData = await pollForWFData(tab.id, (t, msg) => {
+        wfData = await pollForWFData(tab.id, wfAccountId, (t, msg) => {
             reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
         });
         console.log("WF account ID:", wfData.accountId);
@@ -71,14 +75,22 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
         } else {
             console.log("WF: no new transactions.");
         }
-        await updateLastSyncCount(accountKey, transactions.length);
-        await updateLastSyncMetrics(accountKey, transactions);
+        await updateLastSyncStats(accountKey, transactions);
+
+        if (wfData.balance != null) {
+            try {
+                await applyStartingBalance("WF", accountKey, { settings, accountId: actualAccountId, transactions, accountBalance: -wfData.balance, isFirstSync, startDate, importedId: "wf-starting-balance" });
+            } catch (err) {
+                console.warn("WF: failed to verify starting balance:", err.message);
+            }
+        }
+
         reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("WF import failed:", err.message);
     }
 
-    if (!isForced) await updateLastSyncDate(accountKey, today);
+    await updateLastSyncDate(accountKey, today);
 }
 
 const WF_STATE_LABELS = {
@@ -87,12 +99,12 @@ const WF_STATE_LABELS = {
     "get-data": "Downloading transactions…",
 };
 
-function pollForWFData(tabId, onTick) {
+function pollForWFData(tabId, wfAccountId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
         let dataPageStart = null;
         let wfState = "click-card";
-        let clickedCard = false;
+        let wfBalance = null;
         let clickedDownload = false;
 
         const interval = setInterval(async () => {
@@ -122,19 +134,28 @@ function pollForWFData(tabId, onTick) {
                 if (tab.status !== "complete") return;
 
                 if (wfState === "click-card" && tab.url?.includes("accountsummary")) {
-                    if (!clickedCard) {
-                        const clicked = await chrome.scripting.executeScript({
-                            target: { tabId },
-                            func: () => {
-                                const btn = document.querySelector('[data-testid="WELLS FARGO AUTOGRAPH VISA® CARD-title"]')?.closest("button");
-                                if (btn) { btn.click(); return true; }
-                                return false;
-                            },
-                        });
-                        if (clicked?.[0]?.result) {
-                            clickedCard = true;
-                            wfState = "click-download";
-                        }
+                    const result = await chrome.scripting.executeScript({
+                        target: { tabId },
+                        world: "MAIN",
+                        args: [wfAccountId],
+                        func: (accountId) => {
+                            const summary = window._wfPayload?.applicationData?.accountSummary;
+                            if (!summary) return null;
+                            const account = summary.accounts?.find(a => a.accountId === accountId && a.type === "credit")
+                                ?? summary.accounts?.find(a => a.type === "credit");
+                            if (!account) return null;
+                            const productName = account.accountProfile?.accountProductName;
+                            const btn = document.querySelector(`[data-testid="${productName}-title"]`)?.closest("button");
+                            if (!btn) return null;
+                            btn.click();
+                            const outstanding = account.balance?.find(b => b.type === "OUTSTANDING");
+                            return { balance: outstanding != null ? Math.round(outstanding.amount * 100) : null };
+                        },
+                    });
+                    const payload = result?.[0]?.result;
+                    if (payload) {
+                        wfBalance = payload.balance;
+                        wfState = "click-download";
                     }
 
                 } else if (wfState === "click-download" && tab.url?.includes("accountdetails")) {
@@ -156,11 +177,73 @@ function pollForWFData(tabId, onTick) {
                 } else if (wfState === "get-data" && tab.url?.includes("download-accountactivity")) {
                     const urlObj = new URL(tab.url);
                     const xatoken = urlObj.searchParams.get("_xa");
-                    const accountId = urlObj.searchParams.get("accountId");
+                    const accountId = urlObj.searchParams.get("accountId") ?? wfAccountId;
                     if (xatoken && accountId) {
                         clearInterval(interval);
-                        resolve({ accountId, xatoken });
+                        resolve({ accountId, xatoken, balance: wfBalance });
                     }
+                }
+            } catch {
+                // Tab not ready yet
+            }
+        }, POLL_INTERVAL_MS);
+    });
+}
+
+export async function getWellsFargoAccountsForPopup() {
+    const tab = await openTabBackground("https://www.wellsfargo.com/");
+    chrome.tabs.update(tab.id, { active: true });
+    chrome.windows.update(tab.windowId, { focused: true });
+
+    let accounts;
+    try {
+        accounts = await pollForWFAccounts(tab.id);
+    } catch (err) {
+        chrome.tabs.remove(tab.id);
+        throw new Error("Timed out waiting for Wells Fargo login");
+    }
+
+    chrome.tabs.remove(tab.id);
+    return accounts;
+}
+
+function pollForWFAccounts(tabId) {
+    return new Promise((resolve, reject) => {
+        const start = Date.now();
+
+        const interval = setInterval(async () => {
+            const elapsed = Date.now() - start;
+            if (elapsed > POLL_TIMEOUT_MS) {
+                clearInterval(interval);
+                reject(new Error("Timed out waiting for Wells Fargo accounts"));
+                return;
+            }
+
+            try {
+                const tab = await chrome.tabs.get(tabId);
+                if (tab.status !== "complete") return;
+                if (!tab.url?.includes("accountsummary")) return;
+
+                const result = await chrome.scripting.executeScript({
+                    target: { tabId },
+                    world: "MAIN",
+                    func: () => {
+                        const summary = window._wfPayload?.applicationData?.accountSummary;
+                        if (!summary) return null;
+                        return (summary.accounts ?? [])
+                            .filter(a => a.type === "credit")
+                            .map(a => ({
+                                id: a.accountId,
+                                name: a.accountProfile?.accountProductName ?? "Credit Card",
+                                lastFour: a.maskedNumber?.replace(/\.\.\./g, ""),
+                            }));
+                    },
+                });
+
+                const accounts = result?.[0]?.result;
+                if (accounts?.length > 0) {
+                    clearInterval(interval);
+                    resolve(accounts);
                 }
             } catch {
                 // Tab not ready yet

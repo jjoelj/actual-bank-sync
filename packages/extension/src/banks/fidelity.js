@@ -1,19 +1,22 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions } from "../utils.js";
+import { getSyncPlan, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
 
 export async function syncFidelity(settings, accountMappings, accountKey, options = {}) {
     console.log("Fidelity: starting");
-    const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
-    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
+    const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
+    let plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
     if (!plan) {
         console.warn("Fidelity: no sync start date configured, skipping.");
         return;
     }
+    if (isFirstSync) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
     if (!plan.shouldSync) {
         console.log("Fidelity: already synced today, skipping.");
         return;
     }
-    const { startDate, endDate: today, isForced } = plan;
-    console.log(`Fidelity sync: ${startDate} → ${today}`);
+    const { startDate, endDate: today } = plan;
+    const todayStr = pacificDate(new Date());
+    console.log(`Fidelity sync: ${startDate} → ${todayStr}`);
     reportProgress(options, 15, "Waiting for Fidelity");
 
     const actualAccountId = accountMappings[accountKey];
@@ -42,7 +45,7 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
             accessToken: fidelityData.accessToken,
             accountToken: fidelityData.accountToken,
             startDate,
-            endDate: today,
+            endDate: todayStr,
         });
         if (result.error) throw new Error(result.error);
         csvData = result.data;
@@ -54,6 +57,13 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
 
     chrome.tabs.remove(tab.id);
 
+    let currentBalance = null;
+    try {
+        currentBalance = await fetchFidelityBalance(fidelityData.accessToken, fidelityData.accountToken);
+    } catch (err) {
+        console.warn("Fidelity: failed to fetch balance:", err.message);
+    }
+
     try {
         const transactions = parseFidelityCsv(csvData);
         if (transactions.length > 0) {
@@ -63,14 +73,55 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
         } else {
             console.log("Fidelity: no new transactions.");
         }
-        await updateLastSyncCount(accountKey, transactions.length);
-        await updateLastSyncMetrics(accountKey, transactions);
+        await updateLastSyncStats(accountKey, transactions);
+
+        if (currentBalance != null) {
+            await applyStartingBalance("Fidelity", accountKey, { settings, accountId: actualAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: "fidelity-starting-balance" });
+        }
+
         reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("Fidelity import failed:", err.message);
     }
 
-    if (!isForced) await updateLastSyncDate(accountKey, today);
+    await updateLastSyncDate(accountKey, today);
+}
+
+async function fetchFidelityBalance(accessToken, accountToken) {
+    const response = await fetch("https://api.usbank.com/partner-services/graphql/v1", {
+        method: "POST",
+        headers: {
+            accept: "*/*",
+            "accept-language": "en-US,en;q=0.9",
+            aftokenvalue: "null",
+            "application-id": "RPCAD",
+            authorization: `Bearer ${accessToken}`,
+            "client-application": "RPCWEB",
+            "content-type": "application/json",
+            customergroupid: "ELAN",
+            customerpartnerid: "fid",
+            customerpartnerloc: "24193",
+            routingkey: "",
+        },
+        body: JSON.stringify({
+            query: `query accounts($accountInput: AccountInput) {
+  accounts(accountInput: $accountInput) {
+    ... on CreditAccount { balances { currentBalance } }
+  }
+}`,
+            variables: {
+                accountInput: {
+                    accountTokens: [accountToken],
+                    identifierType: "ACCOUNTTOKEN",
+                },
+            },
+        }),
+    });
+    if (!response.ok) throw new Error(`Fidelity balance failed: ${response.status}`);
+    const json = await response.json();
+    const balance = json?.data?.accounts?.[0]?.balances?.currentBalance;
+    if (balance == null) throw new Error("currentBalance not found");
+    return Math.round(balance * 100);
 }
 
 const FIDELITY_STATE_LABELS = {
@@ -111,16 +162,18 @@ function pollForFidelityData(tabId, onTick) {
                 if (tab.status !== "complete") return;
 
                 if (fidelityState === "click-card" && tab.url?.includes("digital.fidelity.com")) {
-                    const clicked = await chrome.scripting.executeScript({
-                        target: { tabId },
-                        func: () => {
-                            const link = Array.from(document.querySelectorAll("a[id]"))
-                                .find(a => /^\d{4}$/.test(a.id));
-                            if (link) { link.click(); return true; }
-                            return false;
-                        },
-                    });
-                    if (clicked?.[0]?.result) fidelityState = "click-download";
+                    if (/#\d{4}/.test(tab.url)) {
+                        fidelityState = "click-download";
+                    } else {
+                        await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => {
+                                const link = Array.from(document.querySelectorAll("a[id]"))
+                                    .find(a => /^\d{4}$/.test(a.id));
+                                link?.click();
+                            },
+                        });
+                    }
                 } else if ((fidelityState === "click-download" || fidelityState === "await-redirect") && tab.url?.includes("digital.fidelity.com")) {
                     if (fidelityState === "await-redirect") return;
                     if (!listenerRegistered) {

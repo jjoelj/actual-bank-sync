@@ -1,9 +1,17 @@
 export const POLL_INTERVAL_MS = 3000;
 export const POLL_TIMEOUT_MS = 2 * 60 * 1000;
 
+export function subtractOneDay(isoDate) {
+    const [y, m, d] = isoDate.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+}
+
 import { sendToHost } from './host.js';
 
 export async function importTransactions(label, settings, accountId, transactions) {
+    const cutoff = offsetDate(pacificDate(new Date()), -1);
+    transactions = transactions.filter(tx => tx.date <= cutoff);
+
     const idCounts = new Map();
     const deduped = transactions.map(tx => {
         if (!tx.imported_id) return tx;
@@ -68,35 +76,86 @@ export function isoDate(date) {
     return date.toISOString().split("T")[0];
 }
 
+export function pacificDate(date) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(date);
+}
+
 export function offsetDate(isoStr, days) {
-    const d = new Date(isoStr);
-    d.setDate(d.getDate() + days);
-    return isoDate(d);
+    const [y, m, d] = isoStr.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
 export function alreadySyncedToday(lastSyncDates, key) {
-    return lastSyncDates[key] === offsetDate(isoDate(new Date()), -1);
+    return lastSyncDates[key] === offsetDate(pacificDate(new Date()), -1);
 }
 
 export function getSyncPlan(lastSyncDates, syncFromDate, key, options = {}) {
-    const endDate = offsetDate(isoDate(new Date()), -1);
-    const forceDays = options.forceDays || 0;
-    const isForced = forceDays > 0;
-
-    if (isForced) {
-        const startDate = offsetDate(endDate, -(forceDays - 1));
-        return { startDate, endDate, isForced, shouldSync: true };
-    }
-
+    const endDate = offsetDate(pacificDate(new Date()), -1);
     const startDate = lastSyncDates[key] || syncFromDate;
     if (!startDate) return null;
 
     return {
         startDate,
         endDate,
-        isForced: false,
         shouldSync: !alreadySyncedToday(lastSyncDates, key),
     };
+}
+
+// accountBalance: what Actual should show right now — positive for checking, negative for credit.
+// transactions: all fetched for this sync window (startDate → today Pacific).
+// Invariant: startingBalance + cumulativeTxSum + todayTxSum == accountBalance
+export async function verifyAndSaveStartingBalance(key, { transactions, accountBalance, isFirstSync }) {
+    const todayStr = pacificDate(new Date());
+    const endDate = offsetDate(todayStr, -1);
+
+    const {
+        startingBalances = {},
+        cumulativeTxSums = {},
+        balanceCheckEndDates = {},
+    } = await chrome.storage.local.get(["startingBalances", "cumulativeTxSums", "balanceCheckEndDates"]);
+
+    const savedStartingBalance = startingBalances[key];
+    const isNew = savedStartingBalance === undefined || isFirstSync;
+    const prevCumulative = isNew ? 0 : (cumulativeTxSums[key] ?? 0);
+    const prevEndDate = isNew ? undefined : balanceCheckEndDates[key];
+
+    const todayTxSum = transactions
+        .filter(tx => tx.date === todayStr)
+        .reduce((s, tx) => s + tx.amount, 0);
+
+    // Only count transactions not already in prevCumulative (date > prevEndDate, up to yesterday)
+    const newImportedTxSum = transactions
+        .filter(tx => tx.date <= endDate && (prevEndDate === undefined || tx.date > prevEndDate))
+        .reduce((s, tx) => s + tx.amount, 0);
+
+    const newCumulative = prevCumulative + newImportedTxSum;
+
+    if (isNew) {
+        const startingBalance = accountBalance - newImportedTxSum - todayTxSum;
+        startingBalances[key] = startingBalance;
+        cumulativeTxSums[key] = newCumulative;
+        balanceCheckEndDates[key] = endDate;
+        await chrome.storage.local.set({ startingBalances, cumulativeTxSums, balanceCheckEndDates });
+        return { isNew: true, isFirstSync, changed: false, startingBalance };
+    }
+
+    const drift = savedStartingBalance + newCumulative + todayTxSum - accountBalance;
+    const changed = drift !== 0;
+
+    if (changed) {
+        const sign = drift > 0 ? "+" : "";
+        console.warn(`Balance drift for ${key}: ${sign}$${(drift / 100).toFixed(2)}`);
+        const { balanceDrifts = {} } = await chrome.storage.local.get("balanceDrifts");
+        balanceDrifts[key] = { drift, at: Date.now() };
+        await chrome.storage.local.set({ balanceDrifts });
+        chrome.action.setBadgeText({ text: "!" });
+        chrome.action.setBadgeBackgroundColor({ color: "#e53e3e" });
+    }
+
+    cumulativeTxSums[key] = newCumulative;
+    balanceCheckEndDates[key] = endDate;
+    await chrome.storage.local.set({ cumulativeTxSums, balanceCheckEndDates });
+    return { isNew: false, isFirstSync, changed };
 }
 
 export function reportProgress(options, ...args) {
@@ -124,13 +183,6 @@ export async function updateLastSyncDate(key, date) {
     const { lastSyncDates = {} } = await chrome.storage.local.get("lastSyncDates");
     lastSyncDates[key] = date;
     await chrome.storage.local.set({ lastSyncDates });
-}
-
-export async function updateLastSyncCount(key, count) {
-    if (!count) return;
-    const { lastSyncCounts = {} } = await chrome.storage.local.get("lastSyncCounts");
-    lastSyncCounts[key] = count;
-    await chrome.storage.local.set({ lastSyncCounts });
 }
 
 export async function updateLastSyncMetrics(key, transactions) {
@@ -168,6 +220,28 @@ export async function updateLastSyncMetrics(key, transactions) {
         updates.lastSyncMetrics = lastSyncMetrics;
     }
     if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
+}
+
+export async function updateLastSyncStats(key, transactions) {
+    await updateLastSyncMetrics(key, transactions);
+}
+
+// Calls verifyAndSaveStartingBalance and, on first sync, imports a synthetic starting balance transaction.
+// accountBalance: what Actual should show right now (positive for checking/wallet, negative for credit).
+// transactions: the transactions used for balance math (may be a subset of what was imported, e.g. wallet-only).
+export async function applyStartingBalance(label, key, { settings, accountId, transactions, accountBalance, isFirstSync, startDate, importedId }) {
+    const { startingBalance } = await verifyAndSaveStartingBalance(key, { transactions, accountBalance, isFirstSync });
+    console.log(`${label}: accountBalance=${accountBalance}${isFirstSync ? ` startingBalance=${startingBalance}` : ""}`);
+    if (isFirstSync && startingBalance !== 0) {
+        const dayBefore = subtractOneDay(startDate);
+        await importTransactions(`${label} Starting Balance`, settings, accountId, [{
+            date: dayBefore,
+            amount: startingBalance,
+            payee_name: "Starting Balance",
+            imported_id: importedId,
+        }]);
+        console.log(`${label}: imported starting balance ${startingBalance} on ${dayBefore}`);
+    }
 }
 
 function updateSyncSummary(summary, sessionId, key, metrics) {

@@ -1,8 +1,8 @@
-import { getSyncPlan, parseCsvLine, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncCount, updateLastSyncMetrics, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
+import { getSyncPlan, parseCsvLine, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance, POLL_INTERVAL_MS, POLL_TIMEOUT_MS } from "../utils.js";
 
 export async function syncVenmo(settings, accountMappings, options = {}) {
     console.log("Venmo: starting");
-    const { lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate"]);
+    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
 
     const cashAccountId = accountMappings["venmo-cash"];
     const creditAccountId = accountMappings["venmo-credit"];
@@ -54,7 +54,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
         console.log(`Venmo sync: ${cashStart} → ${today}`);
         try {
             reportProgress(options, "venmo-cash", 55, "Fetching transactions");
-            const transactions = await fetchVenmoTransactions(venmoData.profileId, cashStart, today);
+            const { transactions, walletTransactions, endingBalance } = await fetchVenmoTransactions(venmoData.profileId, cashStart, today);
             if (transactions.length > 0) {
                 reportProgress(options, "venmo-cash", 80, `Importing ${transactions.length} transactions`);
                 console.log(`Venmo: importing ${transactions.length} transactions.`);
@@ -62,18 +62,28 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
             } else {
                 console.log("Venmo: no new transactions.");
             }
-            await updateLastSyncCount("venmo-cash", transactions.length);
-            await updateLastSyncMetrics("venmo-cash", transactions);
+            await updateLastSyncStats("venmo-cash", transactions);
+
+            if (endingBalance != null) {
+                const isFirstSync = !lastSyncDates["venmo-cash"] || startingBalances["venmo-cash"] === undefined;
+                try {
+                    await applyStartingBalance("Venmo", "venmo-cash", { settings, accountId: cashAccountId, transactions: walletTransactions, accountBalance: endingBalance, isFirstSync, startDate: cashStart, importedId: "venmo-cash-starting-balance" });
+                } catch (err) {
+                    console.warn("Venmo: failed to verify starting balance:", err.message);
+                }
+            }
+
             reportProgress(options, "venmo-cash", 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("Venmo failed:", err.message);
         }
-        if (!cashPlan.isForced) await updateLastSyncDate("venmo-cash", today);
+        await updateLastSyncDate("venmo-cash", today);
         await clearSyncError("venmo-cash");
     }
 
     if (needsCredit) {
         console.log(`Venmo Credit sync: ${creditStart} → ${today}`);
+        const isFirstSync = !lastSyncDates["venmo-credit"] || startingBalances["venmo-credit"] === undefined;
         try {
             reportProgress(options, "venmo-credit", 55, "Fetching transactions");
             const transactions = await fetchVenmoCreditTransactions(venmoData.bearerToken, creditStart, today);
@@ -84,13 +94,20 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
             } else {
                 console.log("Venmo Credit: no new transactions.");
             }
-            await updateLastSyncCount("venmo-credit", transactions.length);
-            await updateLastSyncMetrics("venmo-credit", transactions);
+            await updateLastSyncStats("venmo-credit", transactions);
+
+            try {
+                const currentBalance = await fetchVenmoCreditBalance(venmoData.bearerToken);
+                await applyStartingBalance("Venmo Credit", "venmo-credit", { settings, accountId: creditAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate: creditStart, importedId: "venmo-credit-starting-balance" });
+            } catch (err) {
+                console.warn("Venmo Credit: failed to verify starting balance:", err.message);
+            }
+
             reportProgress(options, "venmo-credit", 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("Venmo Credit failed:", err.message);
         }
-        if (!creditPlan.isForced) await updateLastSyncDate("venmo-credit", today);
+        await updateLastSyncDate("venmo-credit", today);
     }
 }
 
@@ -221,9 +238,11 @@ async function fetchVenmoTransactions(profileId, startDate, endDate) {
 
 function parseVenmoCsv(csv, startDate, endDate) {
     const lines = csv.trim().split("\n");
-    if (lines.length < 4) return [];
+    if (lines.length < 4) return { transactions: [], walletTransactions: [], endingBalance: null };
 
     const transactions = [];
+    const walletTransactions = [];
+    let endingBalance = null;
 
     for (let i = 3; i < lines.length; i++) {
         const cols = parseCsvLine(lines[i]);
@@ -234,10 +253,20 @@ function parseVenmoCsv(csv, startDate, endDate) {
         const note = cols[5]?.trim();
         const from = cols[6]?.trim();
         const to = cols[7]?.trim();
+        const fundingSource = cols[14]?.trim();
         const destination = cols[15]?.trim();
         const amountRaw = cols[8]?.trim();
 
-        if (!id || !datetime || !amountRaw) continue;
+        if (!id) {
+            const raw = cols[17]?.trim();
+            if (raw) {
+                const match = raw.replace(/,/g, "").match(/\$\s*([\d.]+)/);
+                if (match) endingBalance = Math.round(parseFloat(match[1]) * 100);
+            }
+            continue;
+        }
+
+        if (!datetime || !amountRaw) continue;
         if (status && status !== "Complete" && status !== "Issued") continue;
 
         const amountMatch = amountRaw.replace(/,/g, "").match(/([+-])\s*\$\s*([\d.]+)/);
@@ -256,16 +285,27 @@ function parseVenmoCsv(csv, startDate, endDate) {
         else payee = destination || type;
         const notes = type === "Payment" || type === "Charge" ? note : type;
 
-        transactions.push({
-            date,
-            amount,
-            notes,
-            payee_name: payee,
-            imported_id: `venmo-${id}`,
-        });
+        const tx = { date, amount, notes, payee_name: payee, imported_id: `venmo-${id}` };
+        transactions.push(tx);
+        const flowsThroughBank = (type === "Payment" || type === "Charge" || type === "Credit Card Payment") && fundingSource !== "" && fundingSource !== "Venmo balance";
+        if (!flowsThroughBank) walletTransactions.push(tx);
     }
 
-    return transactions;
+    return { transactions, walletTransactions, endingBalance };
+}
+
+async function fetchVenmoCreditBalance(bearerToken) {
+    const res = await fetch("https://api.venmo.com/v1/credit-card/account-summary", {
+        headers: {
+            authorization: `Bearer ${bearerToken}`,
+            accept: "application/json",
+        },
+    });
+    if (!res.ok) throw new Error(`Venmo Credit balance failed: ${res.status}`);
+    const body = await res.json();
+    const data = body.data ?? body;
+    if (data.balance == null) throw new Error("balance not found in account-summary response");
+    return data.balance;
 }
 
 async function fetchVenmoCreditTransactions(bearerToken, startDate, endDate) {

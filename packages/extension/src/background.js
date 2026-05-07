@@ -1,19 +1,17 @@
 import { syncSoFi, getSoFiAccountsForPopup } from "./banks/sofi.js";
 import { syncVenmo } from "./banks/venmo.js";
 import { syncBilt } from "./banks/bilt.js";
-import { syncCapitalOne } from "./banks/capitalone.js";
+import { syncCapitalOne, getCapitalOneAccountsForPopup } from "./banks/capitalone.js";
 import { syncFidelity } from "./banks/fidelity.js";
 import { syncTarget } from "./banks/target.js";
-import { syncWellsFargo } from "./banks/wellsfargo.js";
+import { syncWellsFargo, getWellsFargoAccountsForPopup } from "./banks/wellsfargo.js";
 import { sendToHost } from "./host.js";
 import { ACCOUNT_TYPES } from "./accounts.js";
 
 const SINGLE_ACCOUNT_SYNC = {
-  bilt:       syncBilt,
-  capitalone: syncCapitalOne,
-  fidelity:   syncFidelity,
-  target:     syncTarget,
-  wf:         syncWellsFargo,
+  bilt:     syncBilt,
+  fidelity: syncFidelity,
+  target:   syncTarget,
 };
 
 // background.js - service worker
@@ -100,8 +98,30 @@ async function runSync(options = {}) {
   const sofiKeys = keys.filter(k => k.startsWith("sofi-"));
   if (sofiKeys.length) {
     sofiKeys.forEach(k => sendProgress(k, 5, "Opening SoFi"));
-    await syncSoFi(settings, scopedMappings, getSyncOptionsForKeys(options, sofiKeys, (key, percent, message) => sendProgress(key, percent, message)));
+    const allSofiMappings = Object.fromEntries(Object.entries(accountMappings).filter(([k]) => k.startsWith("sofi-")));
+    await syncSoFi(settings, allSofiMappings, {
+      ...getSyncOptionsForKeys(options, sofiKeys, (key, percent, message) => sendProgress(key, percent, message)),
+      syncKeys: sofiKeys,
+    });
     sofiKeys.forEach(k => sendProgress(k, null));
+  }
+
+  const caponeKeys = keys.filter(k => k.startsWith("capitalone-"));
+  if (caponeKeys.length) {
+    caponeKeys.forEach(k => sendProgress(k, 5, "Opening Capital One"));
+    const allCaponeMappings = Object.fromEntries(Object.entries(accountMappings).filter(([k]) => k.startsWith("capitalone-")));
+    await syncCapitalOne(settings, allCaponeMappings, {
+      ...getSyncOptionsForKeys(options, caponeKeys, (key, percent, message) => sendProgress(key, percent, message)),
+      syncKeys: caponeKeys,
+    });
+    caponeKeys.forEach(k => sendProgress(k, null));
+  }
+
+  const wfKeys = keys.filter(k => k.startsWith("wf-"));
+  for (const key of wfKeys) {
+    sendProgress(key, 5, "Opening Wells Fargo");
+    await syncWellsFargo(settings, scopedMappings, key, getSyncOptionsForKeys(options, [key], (percent, message) => sendProgress(key, percent, message)));
+    sendProgress(key, null);
   }
 
   const venmoKeys = keys.filter(k => ACCOUNT_TYPES[k]?.bank === "venmo");
@@ -184,6 +204,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "GET_CAPITALONE_ACCOUNTS") {
+    getCapitalOneAccountsForPopup()
+      .then((accounts) => sendResponse({ accounts }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "GET_WF_ACCOUNTS") {
+    getWellsFargoAccountsForPopup()
+      .then((accounts) => sendResponse({ accounts }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
   if (msg.type === "IMPORT_TRANSACTIONS") {
     sendToHost("importTransactions", {
       settings: msg.settings,
@@ -202,14 +236,7 @@ async function notifyPopup() {
 }
 
 function getSyncOptionsForKeys(options, keys, onProgress) {
-  const syncOptions = { onProgress };
-  if (!options.forceDays || !options.forceKeys?.length) return syncOptions;
-  const matchingForceKeys = options.forceKeys.filter(key => keys.includes(key));
-  if (!matchingForceKeys.length) return syncOptions;
-  return {
-    ...syncOptions,
-    forceDays: options.forceDays,
-  };
+  return { onProgress };
 }
 
 async function scheduleNextSyncAlarm() {

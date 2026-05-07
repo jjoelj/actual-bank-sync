@@ -5,14 +5,24 @@
 // Banks with multiple accounts per sync session (sofi, venmo) are handled specially in
 // background.js and don't follow the per-key dispatch pattern.
 
+export const BANK_LABELS = {
+  sofi:        "SoFi",
+  bilt:        "Bilt",
+  venmo:       "Venmo",
+  capitalone:  "Capital One",
+  fidelity:    "Fidelity",
+  target:      "Target",
+  wf:          "Wells Fargo",
+};
+
 export const ACCOUNT_TYPES = {
-  "sofi-banking":      { label: "SoFi Banking",         bank: "sofi" },
-  "sofi-credit":       { label: "SoFi Credit Card",      bank: "sofi" },
-  "bilt-credit":       { label: "Bilt Blue Card",         bank: "bilt" },
-  "venmo-cash":        { label: "Venmo Cash",            bank: "venmo" },
-  "venmo-credit":      { label: "Venmo Credit Card",     bank: "venmo" },
-  "capitalone-credit": { label: "Capital One Savor",     bank: "capitalone" },
-  "fidelity-credit":   { label: "Fidelity Rewards Visa", bank: "fidelity" },
-  "target-credit":     { label: "Target Circle Card",    bank: "target" },
-  "wf-credit":         { label: "Wells Fargo Autograph", bank: "wf" },
+  "sofi-banking":        { label: "Banking",       bank: "sofi" },
+  "sofi-credit":         { label: "Credit Card",   bank: "sofi",       optional: true },
+  "bilt-credit":         { label: "Blue Card",     bank: "bilt" },
+  "venmo-cash":          { label: "Cash",          bank: "venmo" },
+  "venmo-credit":        { label: "Credit Card",   bank: "venmo",      optional: true },
+  "capitalone-cards":    { label: "Cards",         bank: "capitalone" },
+  "fidelity-credit":   { label: "Rewards Visa",  bank: "fidelity" },
+  "target-credit":     { label: "Circle Card",   bank: "target" },
+  "wf-cards":          { label: "Cards",         bank: "wf" },
 };
