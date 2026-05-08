@@ -1,4 +1,4 @@
-import { getSyncPlan, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, applyStartingBalance } from "../utils.js";
+import { getSyncPlan, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, applyStartingBalance, subtractOneDay } from "../utils.js";
 
 export async function syncCapitalOne(settings, accountMappings, options = {}) {
     console.log("Capital One: starting");
@@ -175,6 +175,41 @@ async function fetchCapitalOneTransactions(accountId, startDate, endDate) {
 
         const csv = await response.text();
         allTransactions.push(...parseCapitalOneCsv(csv));
+    }
+
+    // Remove transactions that are going to post today because they aren't included in the balance calc
+    let yesterday = subtractOneDay(endDate);
+    const url = `https://myaccounts.capitalone.com/web-api/protected/19902/credit-cards/accounts/${encodedId}/transactions?fromDate=${yesterday}&toDate=${endDate}`;
+    console.log("Capital One: fetching", url);
+    const response = await fetch(url, {
+        headers: {
+            accept: "application/json;v=1",
+            "accept-language": "en-US",
+            "x-user-action": "ease.detailsAndTransactionSummary",
+            "x-ui-routing-id": "Card/REFID",
+        },
+        credentials: "include",
+    });
+
+    if (!response.ok) throw new Error(`Capital One export failed: ${response.status}`);
+
+    const json = await response.json();
+    for (let tx of json.entries) {
+        if (tx.transactionState === "PENDING" && 'transactionPostedDate' in tx) {
+            let date = tx.transactionPostedDate.split("T")[0];
+            let isCredit = tx.transactionDebitCredit === "Credit";
+            let amount = Math.round(tx.transactionAmount * 100) * (isCredit ? 1 : -1);
+            let category = tx.displayCategory;
+
+            let importedId = `capitalone-${date}-${amount}-${category.trim()}`;
+
+            // only remove first instance in case there are multiple (they'll be handled if needed)
+            let idx = allTransactions.findIndex(t => t.imported_id === importedId);
+            if (idx > 0) {
+                console.log("Removing pending transaction from today:", importedId);
+                allTransactions.splice(idx, 1);
+            }
+        }
     }
 
     return allTransactions;
