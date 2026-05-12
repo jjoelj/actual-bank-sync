@@ -9,9 +9,10 @@ These are the specific cards/accounts this has been tested with. Similar account
 | Institution | Account |
 |---|---|
 | SoFi | Checking, Savings, Credit Card |
-| Wells Fargo | Autograph Card |
-| Capital One | Savor Card |
-| Fidelity | Visa Signature Card |
+| Wells Fargo | Credit Cards |
+| Capital One | Credit Cards |
+| Fidelity | Rewards Visa |
+| US Bank | Credit Cards |
 | BILT | BILT Mastercard |
 | Target | Circle Card |
 | Venmo | Venmo Cash, Venmo Credit Card |

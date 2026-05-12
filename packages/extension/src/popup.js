@@ -11,7 +11,7 @@ const activeProgress = new Map();
 
 const KNOWN_LOCAL_KEYS = new Set([
   "accountMappings", "addedAccountTypes",
-  "cachedActualAccounts", "cachedSofiAccounts", "cachedCapitalOneAccounts", "cachedWFAccounts",
+  "cachedActualAccounts", "cachedSofiAccounts", "cachedCapitalOneAccounts", "cachedUSBankAccounts", "cachedWFAccounts",
   "lastSyncTime", "lastCompletedSyncSessionId", "lastCompletedSyncSummary",
   "activeSyncSessionId", "activeSyncSummary", "nextScheduledSyncAt", "syncFromDate",
   "lastSyncDates", "lastSyncMetrics", "syncErrors",
@@ -24,7 +24,7 @@ const PER_ACCOUNT_KEYS = [
 ];
 
 function isValidKey(key) {
-  return key in ACCOUNT_TYPES || key.startsWith("sofi-") || key.startsWith("capitalone-") || key.startsWith("wf-");
+  return key in ACCOUNT_TYPES || key.startsWith("sofi-") || key.startsWith("capitalone-") || key.startsWith("usbank-") || key.startsWith("wf-");
 }
 
 async function purgeStaleKeys() {
@@ -79,6 +79,9 @@ async function init() {
     } else if (type === "capitalone-cards") {
       const { cachedCapitalOneAccounts = [] } = await chrome.storage.local.get("cachedCapitalOneAccounts");
       addCapitalOneCards(cachedCapitalOneAccounts, accountMappings);
+    } else if (type === "usbank-cards") {
+      const { cachedUSBankAccounts = [] } = await chrome.storage.local.get("cachedUSBankAccounts");
+      addUSBankCards(cachedUSBankAccounts, accountMappings);
     } else if (type === "wf-cards") {
       const { cachedWFAccounts = [] } = await chrome.storage.local.get("cachedWFAccounts");
       addWFCards(cachedWFAccounts, accountMappings);
@@ -271,6 +274,10 @@ async function addBank(bankId) {
     await addCapitalOneBanking();
     return;
   }
+  if (bankId === "usbank") {
+    await addUSBankBanking();
+    return;
+  }
   if (bankId === "wf") {
     await addWFBanking();
     return;
@@ -315,6 +322,30 @@ function addCapitalOneCards(bankAccounts, savedMappings) {
   }
 }
 
+async function addUSBankBanking() {
+  showStatus("Loading US Bank accounts...", "");
+  try {
+    const res = await sendMessage({ type: "GET_USBANK_ACCOUNTS" });
+    if (res.error) throw new Error(res.error);
+    await chrome.storage.local.set({ cachedUSBankAccounts: res.accounts });
+    const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+    addUSBankCards(res.accounts, accountMappings);
+    persistAddedTypes();
+    showStatus("US Bank accounts loaded.", "ok");
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, "error");
+  }
+}
+
+function addUSBankCards(bankAccounts, savedMappings) {
+  addedTypes.add("usbank-cards");
+  for (const account of bankAccounts || []) {
+    const key = `usbank-${account.id}`;
+    const label = `${account.name} (${account.lastFour})`;
+    addMappingRow(key, label, savedMappings[key]);
+  }
+}
+
 async function addWFBanking() {
   showStatus("Loading Wells Fargo accounts...", "");
   try {
@@ -347,6 +378,7 @@ function addAccountRow(type, savedMappings) {
 function getBankForKey(key) {
   if (key.startsWith("sofi-")) return "sofi";
   if (key.startsWith("capitalone-")) return "capitalone";
+  if (key.startsWith("usbank-")) return "usbank";
   if (key.startsWith("wf-")) return "wf";
   return ACCOUNT_TYPES[key]?.bank ?? null;
 }
@@ -354,6 +386,7 @@ function getBankForKey(key) {
 const BANK_FETCH_FNS = {
   sofi:       addSoFiBanking,
   capitalone: addCapitalOneBanking,
+  usbank:     addUSBankBanking,
   wf:         addWFBanking,
 };
 
@@ -507,6 +540,9 @@ function addMappingRow(mappingKey, label, selectedId) {
     } else if (type === "capitalone-cards") {
       const hasMoreRows = !!document.querySelector('.account-row[data-row-key^="capitalone-"]');
       if (!hasMoreRows) addedTypes.delete("capitalone-cards");
+    } else if (type === "usbank-cards") {
+      const hasMoreRows = !!document.querySelector('.account-row[data-row-key^="usbank-"]');
+      if (!hasMoreRows) addedTypes.delete("usbank-cards");
     } else if (type === "wf-cards") {
       const hasMoreRows = !!document.querySelector('.account-row[data-row-key^="wf-"]');
       if (!hasMoreRows) addedTypes.delete("wf-cards");
@@ -564,6 +600,7 @@ function addMappingRow(mappingKey, label, selectedId) {
 function getTypeForKey(mappingKey) {
   if (mappingKey.startsWith("sofi-") && mappingKey !== "sofi-credit") return "sofi-banking";
   if (mappingKey.startsWith("capitalone-")) return "capitalone-cards";
+  if (mappingKey.startsWith("usbank-")) return "usbank-cards";
   if (mappingKey.startsWith("wf-")) return "wf-cards";
   return ACCOUNT_TYPES[mappingKey] ? mappingKey : null;
 }
@@ -911,6 +948,12 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
   if (changes.cachedCapitalOneAccounts) {
     addCapitalOneCards(changes.cachedCapitalOneAccounts.newValue || [], accountMappings);
+    persistAddedTypes();
+    await renderSyncStatus();
+    updateSyncBtn();
+  }
+  if (changes.cachedUSBankAccounts) {
+    addUSBankCards(changes.cachedUSBankAccounts.newValue || [], accountMappings);
     persistAddedTypes();
     await renderSyncStatus();
     updateSyncBtn();

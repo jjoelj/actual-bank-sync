@@ -25,50 +25,52 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
 
     const tab = await openTabBackground("https://www.bilt.com/wallet");
 
-    let biltData;
-    try {
-        biltData = await pollForBiltData(tab.id, (t) => {
-            reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
-        });
-    } catch (err) {
-        console.error("Bilt: login failed, giving up.");
-        return;
-    }
-
     let transactions = [];
-    try {
-        reportProgress(options, 55, "Fetching transactions");
-        const chunks = getDateChunks(startDate, fetchEnd, 180);
-        for (const [chunkStart, chunkEnd] of chunks) {
-            const fetchResult = await chrome.tabs.sendMessage(tab.id, {
-                type: "FETCH_BILT_TRANSACTIONS",
-                cardId: biltData.cardId,
-                startDate: chunkStart,
-                endDate: chunkEnd,
-                accessToken: biltData.accessToken,
-            });
-            if (fetchResult.error) throw new Error(fetchResult.error);
-            transactions.push(...parseBiltCsv(fetchResult.data));
-        }
-    } catch (err) {
-        console.error("Bilt fetch failed:", err.message);
-        chrome.tabs.remove(tab.id);
-        return;
-    }
-
     let currentBalance = null;
-    const balResult = await chrome.tabs.sendMessage(tab.id, {
-        type: "FETCH_BILT_BALANCE",
-        cardId: biltData.cardId,
-        accessToken: biltData.accessToken,
-    });
-    if (balResult.error) {
-        console.warn("Bilt: failed to fetch balance:", balResult.error);
-    } else {
-        currentBalance = balResult.balance;
-    }
 
-    chrome.tabs.remove(tab.id);
+    try {
+        let biltData;
+        try {
+            biltData = await pollForBiltData(tab.id, (t) => {
+                reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+            });
+        } catch (err) {
+            console.error("Bilt: login failed, giving up.");
+            return;
+        }
+
+        try {
+            reportProgress(options, 55, "Fetching transactions");
+            const chunks = getDateChunks(startDate, fetchEnd, 180);
+            for (const [chunkStart, chunkEnd] of chunks) {
+                const fetchResult = await chrome.tabs.sendMessage(tab.id, {
+                    type: "FETCH_BILT_TRANSACTIONS",
+                    cardId: biltData.cardId,
+                    startDate: chunkStart,
+                    endDate: chunkEnd,
+                    accessToken: biltData.accessToken,
+                });
+                if (fetchResult.error) throw new Error(fetchResult.error);
+                transactions.push(...parseBiltCsv(fetchResult.data));
+            }
+        } catch (err) {
+            console.error("Bilt fetch failed:", err.message);
+            return;
+        }
+
+        const balResult = await chrome.tabs.sendMessage(tab.id, {
+            type: "FETCH_BILT_BALANCE",
+            cardId: biltData.cardId,
+            accessToken: biltData.accessToken,
+        });
+        if (balResult.error) {
+            console.warn("Bilt: failed to fetch balance:", balResult.error);
+        } else {
+            currentBalance = balResult.balance;
+        }
+    } finally {
+        chrome.tabs.remove(tab.id);
+    }
 
     if (transactions.length > 0) {
         reportProgress(options, 80, `Importing ${transactions.length} transactions`);

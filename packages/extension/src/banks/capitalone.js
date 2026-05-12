@@ -31,12 +31,12 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
         });
     } catch (err) {
         console.error("Capital One: login failed, giving up.", err.message);
-        chrome.tabs.remove(tab.id);
         return;
+    } finally {
+        chrome.tabs.remove(tab.id);
     }
 
     await chrome.storage.local.set({ cachedCapitalOneAccounts: caponeAccounts });
-    chrome.tabs.remove(tab.id);
 
     const todayStr = pacificDate(new Date());
 
@@ -87,16 +87,13 @@ export async function getCapitalOneAccountsForPopup() {
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
 
-    let accounts;
     try {
-        accounts = await pollForCapitalOneAccounts(tab.id);
+        return await pollForCapitalOneAccounts(tab.id);
     } catch (err) {
-        chrome.tabs.remove(tab.id);
         throw new Error("Timed out waiting for Capital One login");
+    } finally {
+        chrome.tabs.remove(tab.id);
     }
-
-    chrome.tabs.remove(tab.id);
-    return accounts;
 }
 
 function pollForCapitalOneAccounts(tabId, onTick) {
@@ -115,6 +112,7 @@ function pollForCapitalOneAccounts(tabId, onTick) {
             try {
                 const tab = await chrome.tabs.get(tabId);
                 if (tab.status !== "complete") return;
+
                 if (!tab.url?.includes("myaccounts.capitalone.com/accountSummary")) return;
 
                 const accounts = await fetchCapitalOneAccounts();
@@ -205,7 +203,7 @@ async function fetchCapitalOneTransactions(accountId, startDate, endDate) {
 
             // only remove first instance in case there are multiple (they'll be handled if needed)
             let idx = allTransactions.findIndex(t => t.imported_id === importedId);
-            if (idx > 0) {
+            if (idx >= 0) {
                 console.log("Removing pending transaction from today:", importedId);
                 allTransactions.splice(idx, 1);
             }

@@ -23,48 +23,49 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
 
-    let targetData;
-    try {
-        targetData = await pollForTargetData(tab.id, (t) => {
-            reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
-        });
-    } catch (err) {
-        chrome.tabs.remove(tab.id);
-        console.error("Target: login failed, giving up.");
-        return;
-    }
-
     let transactions;
     let balance = null;
+
     try {
-        reportProgress(options, 55, "Fetching transactions");
-        const result = await chrome.tabs.sendMessage(tab.id, {
-            type: "FETCH_TARGET_TRANSACTIONS",
-            csrfToken: targetData.csrfToken,
-            bankId: targetData.bankId,
-            startDate,
-            endDate: today,
-        });
-        if (result.error) throw new Error(result.error);
-        transactions = parseTargetTransactions(result.data);
-
-        const balanceResult = await chrome.tabs.sendMessage(tab.id, {
-            type: "FETCH_TARGET_BALANCE",
-            csrfToken: targetData.csrfToken,
-            bankId: targetData.bankId,
-        });
-        if (balanceResult.error) {
-            console.warn("Target: failed to get balance:", balanceResult.error);
-        } else {
-            balance = balanceResult.balance;
+        let targetData;
+        try {
+            targetData = await pollForTargetData(tab.id, (t) => {
+                reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+            });
+        } catch (err) {
+            console.error("Target: login failed, giving up.");
+            return;
         }
-    } catch (err) {
-        console.error("Target fetch failed:", err.message);
-        chrome.tabs.remove(tab.id);
-        return;
-    }
 
-    chrome.tabs.remove(tab.id);
+        try {
+            reportProgress(options, 55, "Fetching transactions");
+            const result = await chrome.tabs.sendMessage(tab.id, {
+                type: "FETCH_TARGET_TRANSACTIONS",
+                csrfToken: targetData.csrfToken,
+                bankId: targetData.bankId,
+                startDate,
+                endDate: today,
+            });
+            if (result.error) throw new Error(result.error);
+            transactions = parseTargetTransactions(result.data);
+
+            const balanceResult = await chrome.tabs.sendMessage(tab.id, {
+                type: "FETCH_TARGET_BALANCE",
+                csrfToken: targetData.csrfToken,
+                bankId: targetData.bankId,
+            });
+            if (balanceResult.error) {
+                console.warn("Target: failed to get balance:", balanceResult.error);
+            } else {
+                balance = balanceResult.balance;
+            }
+        } catch (err) {
+            console.error("Target fetch failed:", err.message);
+            return;
+        }
+    } finally {
+        chrome.tabs.remove(tab.id);
+    }
 
     const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
     try {
@@ -97,8 +98,11 @@ function pollForTargetData(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
         let dataPageStart = null;
+        let busy = false;
 
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
             try {
@@ -152,6 +156,8 @@ function pollForTargetData(tabId, onTick) {
                 }
             } catch {
                 // Tab not ready yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
     });

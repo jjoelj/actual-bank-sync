@@ -27,35 +27,36 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
     chrome.windows.update(tab.windowId, { focused: true });
 
     let fidelityData;
-    try {
-        fidelityData = await pollForFidelityData(tab.id, (t, msg) => {
-            reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
-        });
-    } catch (err) {
-        chrome.tabs.remove(tab.id);
-        console.error("Fidelity: login failed, giving up.");
-        return;
-    }
-
     let csvData;
-    try {
-        reportProgress(options, 55, "Fetching transactions");
-        const result = await chrome.tabs.sendMessage(tab.id, {
-            type: "FETCH_FIDELITY_TRANSACTIONS",
-            accessToken: fidelityData.accessToken,
-            accountToken: fidelityData.accountToken,
-            startDate,
-            endDate: todayStr,
-        });
-        if (result.error) throw new Error(result.error);
-        csvData = result.data;
-    } catch (err) {
-        console.error("Fidelity fetch failed:", err.message);
-        chrome.tabs.remove(tab.id);
-        return;
-    }
 
-    chrome.tabs.remove(tab.id);
+    try {
+        try {
+            fidelityData = await pollForFidelityData(tab.id, (t, msg) => {
+                reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
+            });
+        } catch (err) {
+            console.error("Fidelity: login failed, giving up.");
+            return;
+        }
+
+        try {
+            reportProgress(options, 55, "Fetching transactions");
+            const result = await chrome.tabs.sendMessage(tab.id, {
+                type: "FETCH_FIDELITY_TRANSACTIONS",
+                accessToken: fidelityData.accessToken,
+                accountToken: fidelityData.accountToken,
+                startDate,
+                endDate: todayStr,
+            });
+            if (result.error) throw new Error(result.error);
+            csvData = result.data;
+        } catch (err) {
+            console.error("Fidelity fetch failed:", err.message);
+            return;
+        }
+    } finally {
+        chrome.tabs.remove(tab.id);
+    }
 
     let currentBalance = null;
     try {
@@ -138,8 +139,11 @@ function pollForFidelityData(tabId, onTick) {
         let trackingTabId = tabId;
         let listenerRegistered = false;
         let fidelityState = "click-card";
+        let busy = false;
 
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), FIDELITY_STATE_LABELS[fidelityState]);
             try {
@@ -211,6 +215,8 @@ function pollForFidelityData(tabId, onTick) {
                 }
             } catch {
                 // Tab not ready yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
     });

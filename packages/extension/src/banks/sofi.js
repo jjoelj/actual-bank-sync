@@ -22,88 +22,86 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     const tab = await openTabBackground("https://www.sofi.com/my/banking/accounts/");
     activeKeys.forEach(k => reportProgress(options, k, 15, "Opening SoFi…"));
 
-    let apolloState;
-    try {
-        apolloState = await pollForApolloState(tab.id, (t) => {
-            activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 30), "Logging in…"));
-        });
-    } catch (err) {
-        console.error("SoFi: login failed, giving up.", err.message);
-        chrome.tabs.remove(tab.id);
-        return;
-    }
-
-    const sofiAccounts = extractSoFiAccounts(apolloState);
-    await chrome.storage.local.set({ cachedSofiAccounts: sofiAccounts });
-
-    if (sofiAccounts.length === 0) {
-        console.warn("SoFi: no accounts found in Apollo state.");
-        chrome.tabs.remove(tab.id);
-        return;
-    }
-
-    activeKeys.forEach(k => reportProgress(options, k, 47, "Getting account data…"));
-
-    let csrfToken;
-    try {
-        csrfToken = await getCsrfFromTab(tab.id);
-    } catch (err) {
-        console.error("SoFi: failed to get CSRF token:", err.message);
-        chrome.tabs.remove(tab.id);
-        return;
-    }
-
-    // Phase 1: all content-script requests while tab is open
     const fetchedData = [];
     const todayStr = pacificDate(new Date());
 
-    for (const account of sofiAccounts) {
-        const mappingKey = `sofi-${account.id}`;
-        if (!syncKeys.includes(mappingKey)) continue;
-        const actualAccountId = accountMappings[mappingKey];
-        if (!actualAccountId) continue;
-        const plan = plans[mappingKey];
-        if (!plan) {
-            console.warn(`SoFi ${account.id}: no sync start date configured, skipping.`);
-            continue;
-        }
-        if (!plan.shouldSync) {
-            console.log(`SoFi ${account.id}: already synced today, skipping.`);
-            continue;
-        }
-        const { startDate, endDate: today } = plan;
-
-        console.log(`SoFi ${account.id} fetching: ${startDate} → ${todayStr}`);
-        reportProgress(options, mappingKey, 55, "Fetching transactions");
-
+    try {
+        let apolloState;
         try {
-            const result = await chrome.tabs.sendMessage(tab.id, {
-                type: "FETCH_SOFI_TRANSACTIONS",
-                accountId: account.queryId,
-                csrfToken,
-                startDate,
-                endDate: todayStr,
+            apolloState = await pollForApolloState(tab.id, (t) => {
+                activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 30), "Logging in…"));
             });
-            if (result.error) throw new Error(result.error);
-
-            let balance = null;
-            const balanceResult = await chrome.tabs.sendMessage(tab.id, {
-                type: "FETCH_SOFI_BALANCE",
-                accountId: account.queryId,
-            });
-            if (balanceResult.error) {
-                console.warn(`SoFi ${account.id}: failed to get balance:`, balanceResult.error);
-            } else {
-                balance = balanceResult.balance;
-            }
-
-            fetchedData.push({ account, mappingKey, actualAccountId, plan, transactions: result.transactions, balance });
         } catch (err) {
-            console.error(`SoFi account ${account.id} fetch failed:`, err.message);
+            console.error("SoFi: login failed, giving up.", err.message);
+            return;
         }
-    }
 
-    chrome.tabs.remove(tab.id);
+        const sofiAccounts = extractSoFiAccounts(apolloState);
+        await chrome.storage.local.set({ cachedSofiAccounts: sofiAccounts });
+
+        if (sofiAccounts.length === 0) {
+            console.warn("SoFi: no accounts found in Apollo state.");
+            return;
+        }
+
+        activeKeys.forEach(k => reportProgress(options, k, 47, "Getting account data…"));
+
+        let csrfToken;
+        try {
+            csrfToken = await getCsrfFromTab(tab.id);
+        } catch (err) {
+            console.error("SoFi: failed to get CSRF token:", err.message);
+            return;
+        }
+
+        for (const account of sofiAccounts) {
+            const mappingKey = `sofi-${account.id}`;
+            if (!syncKeys.includes(mappingKey)) continue;
+            const actualAccountId = accountMappings[mappingKey];
+            if (!actualAccountId) continue;
+            const plan = plans[mappingKey];
+            if (!plan) {
+                console.warn(`SoFi ${account.id}: no sync start date configured, skipping.`);
+                continue;
+            }
+            if (!plan.shouldSync) {
+                console.log(`SoFi ${account.id}: already synced today, skipping.`);
+                continue;
+            }
+            const { startDate, endDate: today } = plan;
+
+            console.log(`SoFi ${account.id} fetching: ${startDate} → ${todayStr}`);
+            reportProgress(options, mappingKey, 55, "Fetching transactions");
+
+            try {
+                const result = await chrome.tabs.sendMessage(tab.id, {
+                    type: "FETCH_SOFI_TRANSACTIONS",
+                    accountId: account.queryId,
+                    csrfToken,
+                    startDate,
+                    endDate: todayStr,
+                });
+                if (result.error) throw new Error(result.error);
+
+                let balance = null;
+                const balanceResult = await chrome.tabs.sendMessage(tab.id, {
+                    type: "FETCH_SOFI_BALANCE",
+                    accountId: account.queryId,
+                });
+                if (balanceResult.error) {
+                    console.warn(`SoFi ${account.id}: failed to get balance:`, balanceResult.error);
+                } else {
+                    balance = balanceResult.balance;
+                }
+
+                fetchedData.push({ account, mappingKey, actualAccountId, plan, transactions: result.transactions, balance });
+            } catch (err) {
+                console.error(`SoFi account ${account.id} fetch failed:`, err.message);
+            }
+        }
+    } finally {
+        chrome.tabs.remove(tab.id);
+    }
 
     // Phase 2: import (tab already closed)
     for (const { account, mappingKey, actualAccountId, plan, transactions, balance } of fetchedData) {
@@ -272,6 +270,18 @@ function pollForApolloState(tabId, onTick) {
                         chrome.windows.update(tab.windowId, { focused: true });
                         console.log("SoFi: waiting for login...");
                     }
+                    if (tab.status === "complete" && tab.url.includes("login.sofi.com")) {
+                        await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => {
+                                const pw = document.querySelector('input#password');
+                                if (!pw) return;
+                                if (!pw.value) return;
+                                const btn = document.querySelector('button[data-action-button-primary="true"]');
+                                if (btn && !btn.disabled) btn.click();
+                            },
+                        });
+                    }
                     return;
                 }
 
@@ -343,14 +353,12 @@ function extractSoFiAccounts(apolloState) {
 export async function getSoFiAccountsForPopup() {
     const tab = await openTabBackground("https://www.sofi.com/my/banking/accounts/");
 
-    let apolloState;
     try {
-        apolloState = await pollForApolloState(tab.id);
+        const apolloState = await pollForApolloState(tab.id);
+        return extractSoFiAccounts(apolloState);
     } catch (err) {
-        chrome.tabs.remove(tab.id);
         throw new Error("Timed out waiting for SoFi login");
+    } finally {
+        chrome.tabs.remove(tab.id);
     }
-
-    chrome.tabs.remove(tab.id);
-    return extractSoFiAccounts(apolloState);
 }

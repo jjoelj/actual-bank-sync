@@ -1,4 +1,4 @@
-export const POLL_INTERVAL_MS = 3000;
+export const POLL_INTERVAL_MS = 500;
 export const POLL_TIMEOUT_MS = 2 * 60 * 1000;
 
 export function subtractOneDay(isoDate) {

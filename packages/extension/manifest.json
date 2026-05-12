@@ -15,6 +15,7 @@
 
   "host_permissions": [
     "https://www.sofi.com/*",
+    "https://login.sofi.com/*",
     "https://*.venmo.com/*",
     "https://www.bilt.com/*",
     "https://myaccounts.capitalone.com/*",
@@ -22,6 +23,7 @@
     "https://digital.fidelity.com/*",
     "https://api.usbank.com/*",
     "https://mytargetcirclecard.target.com/*",
+    "https://onlinebanking.usbank.com/*",
     "https://*.wellsfargo.com/*"
   ],
 
@@ -64,6 +66,11 @@
     {
       "matches": ["https://mytargetcirclecard.target.com/*"],
       "js": ["src/content/content-utils.js", "src/content/target.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://onlinebanking.usbank.com/*"],
+      "js": ["src/content/content-utils.js", "src/content/usbank.js"],
       "run_at": "document_idle"
     },
     {

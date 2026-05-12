@@ -12,6 +12,7 @@ export const BANK_LABELS = {
   capitalone:  "Capital One",
   fidelity:    "Fidelity",
   target:      "Target",
+  usbank:      "US Bank",
   wf:          "Wells Fargo",
 };
 
@@ -24,5 +25,6 @@ export const ACCOUNT_TYPES = {
   "capitalone-cards":    { label: "Cards",         bank: "capitalone" },
   "fidelity-credit":   { label: "Rewards Visa",  bank: "fidelity" },
   "target-credit":     { label: "Circle Card",   bank: "target" },
+  "usbank-cards":      { label: "Cards",         bank: "usbank" },
   "wf-cards":          { label: "Cards",         bank: "wf" },
 };

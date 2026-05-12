@@ -4,6 +4,7 @@ import { syncBilt } from "./banks/bilt.js";
 import { syncCapitalOne, getCapitalOneAccountsForPopup } from "./banks/capitalone.js";
 import { syncFidelity } from "./banks/fidelity.js";
 import { syncTarget } from "./banks/target.js";
+import { syncUSBank, getUSBankAccountsForPopup } from "./banks/usbank.js";
 import { syncWellsFargo, getWellsFargoAccountsForPopup } from "./banks/wellsfargo.js";
 import { sendToHost } from "./host.js";
 import { ACCOUNT_TYPES } from "./accounts.js";
@@ -117,6 +118,17 @@ async function runSync(options = {}) {
     caponeKeys.forEach(k => sendProgress(k, null));
   }
 
+  const usbankKeys = keys.filter(k => k.startsWith("usbank-"));
+  if (usbankKeys.length) {
+    usbankKeys.forEach(k => sendProgress(k, 5, "Opening US Bank"));
+    const allUSBankMappings = Object.fromEntries(Object.entries(accountMappings).filter(([k]) => k.startsWith("usbank-")));
+    await syncUSBank(settings, allUSBankMappings, {
+      ...getSyncOptionsForKeys(options, usbankKeys, (key, percent, message) => sendProgress(key, percent, message)),
+      syncKeys: usbankKeys,
+    });
+    usbankKeys.forEach(k => sendProgress(k, null));
+  }
+
   const wfKeys = keys.filter(k => k.startsWith("wf-"));
   for (const key of wfKeys) {
     sendProgress(key, 5, "Opening Wells Fargo");
@@ -206,6 +218,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "GET_CAPITALONE_ACCOUNTS") {
     getCapitalOneAccountsForPopup()
+      .then((accounts) => sendResponse({ accounts }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "GET_USBANK_ACCOUNTS") {
+    getUSBankAccountsForPopup()
       .then((accounts) => sendResponse({ accounts }))
       .catch((err) => sendResponse({ error: err.message }));
     return true;

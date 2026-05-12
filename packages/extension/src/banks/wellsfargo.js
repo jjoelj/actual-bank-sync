@@ -31,40 +31,41 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
     const wfAccountId = accountKey.slice("wf-".length);
 
     let wfData;
-    try {
-        wfData = await pollForWFData(tab.id, wfAccountId, (t, msg) => {
-            reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
-        });
-        console.log("WF account ID:", wfData.accountId);
-    } catch (err) {
-        chrome.tabs.remove(tab.id);
-        console.error("WF: login failed, giving up.");
-        return;
-    }
-
-    // Format dates as MM/DD/YYYY for WF
-    const fromDate = formatWFDate(startDate);
-    const toDate = formatWFDate(today);
-
     let csvData;
-    try {
-        reportProgress(options, 55, "Fetching transactions");
-        const result = await chrome.tabs.sendMessage(tab.id, {
-            type: "FETCH_WF_TRANSACTIONS",
-            accountId: wfData.accountId,
-            xatoken: wfData.xatoken,
-            startDate: fromDate,
-            endDate: toDate,
-        });
-        if (result.error) throw new Error(result.error);
-        csvData = result.data;
-    } catch (err) {
-        console.error("WF fetch failed:", err.message);
-        chrome.tabs.remove(tab.id);
-        return;
-    }
 
-    chrome.tabs.remove(tab.id);
+    try {
+        try {
+            wfData = await pollForWFData(tab.id, wfAccountId, (t, msg) => {
+                reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
+            });
+            console.log("WF account ID:", wfData.accountId);
+        } catch (err) {
+            console.error("WF: login failed, giving up.");
+            return;
+        }
+
+        // Format dates as MM/DD/YYYY for WF
+        const fromDate = formatWFDate(startDate);
+        const toDate = formatWFDate(today);
+
+        try {
+            reportProgress(options, 55, "Fetching transactions");
+            const result = await chrome.tabs.sendMessage(tab.id, {
+                type: "FETCH_WF_TRANSACTIONS",
+                accountId: wfData.accountId,
+                xatoken: wfData.xatoken,
+                startDate: fromDate,
+                endDate: toDate,
+            });
+            if (result.error) throw new Error(result.error);
+            csvData = result.data;
+        } catch (err) {
+            console.error("WF fetch failed:", err.message);
+            return;
+        }
+    } finally {
+        chrome.tabs.remove(tab.id);
+    }
 
     try {
         const transactions = parseWFCsv(csvData);
@@ -195,16 +196,13 @@ export async function getWellsFargoAccountsForPopup() {
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
 
-    let accounts;
     try {
-        accounts = await pollForWFAccounts(tab.id);
+        return await pollForWFAccounts(tab.id);
     } catch (err) {
-        chrome.tabs.remove(tab.id);
         throw new Error("Timed out waiting for Wells Fargo login");
+    } finally {
+        chrome.tabs.remove(tab.id);
     }
-
-    chrome.tabs.remove(tab.id);
-    return accounts;
 }
 
 function pollForWFAccounts(tabId) {
