@@ -140,6 +140,7 @@ function pollForFidelityData(tabId, onTick) {
         let listenerRegistered = false;
         let fidelityState = "click-card";
         let busy = false;
+        let lastClickTime = 0;
 
         const interval = setInterval(async () => {
             if (busy) return;
@@ -168,7 +169,9 @@ function pollForFidelityData(tabId, onTick) {
                 if (fidelityState === "click-card" && tab.url?.includes("digital.fidelity.com")) {
                     if (/#\d{4}/.test(tab.url)) {
                         fidelityState = "click-download";
-                    } else {
+                        lastClickTime = 0;
+                    } else if (Date.now() - lastClickTime > 5000) {
+                        lastClickTime = Date.now();
                         await chrome.scripting.executeScript({
                             target: { tabId },
                             func: () => {
@@ -196,16 +199,19 @@ function pollForFidelityData(tabId, onTick) {
                         });
                     }
 
-                    await chrome.scripting.executeScript({
-                            target: { tabId: trackingTabId },
-                            world: "MAIN",
-                            func: () => {
-                                const link = Array.from(document.querySelectorAll("a"))
-                                    .find(l => l.textContent.includes("Download transactions") && l.closest(".dwnld-btn-desktop"));
-                                link?.scrollIntoView();
-                                link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
-                            },
-                        });
+                    if (Date.now() - lastClickTime > 5000) {
+                        lastClickTime = Date.now();
+                        await chrome.scripting.executeScript({
+                                target: { tabId: trackingTabId },
+                                world: "MAIN",
+                                func: () => {
+                                    const link = Array.from(document.querySelectorAll("a"))
+                                        .find(l => l.textContent.includes("Download transactions") && l.closest(".dwnld-btn-desktop"));
+                                    link?.scrollIntoView();
+                                    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+                                },
+                            });
+                    }
                 } else if (fidelityState === "get-data" && tab.url?.includes("login.fidelityrewards.com/digital/servicing")) {
                     const result = await chrome.tabs.sendMessage(tabId, { type: "GET_FIDELITY_DATA" });
                     if (result?.accessToken && result?.accountToken) {

@@ -99,6 +99,7 @@ function pollForTargetData(tabId, onTick) {
         const start = Date.now();
         let dataPageStart = null;
         let busy = false;
+        let pendingAction = false;
 
         const interval = setInterval(async () => {
             if (busy) return;
@@ -110,6 +111,7 @@ function pollForTargetData(tabId, onTick) {
 
                 if (!tab.url?.includes("mytargetcirclecard.target.com")) {
                     dataPageStart = null;
+                    pendingAction = false;
                     return;
                 }
 
@@ -120,10 +122,11 @@ function pollForTargetData(tabId, onTick) {
                     return;
                 }
 
-                if (tab.status === "complete" && tab.url?.includes("mytargetcirclecard.target.com/home")) {
-                    chrome.tabs.update(tabId, { url: "https://mytargetcirclecard.target.com/account/transaction-history" });
+                if (tab.status !== "complete") {
+                    pendingAction = false;
                     return;
                 }
+                if (pendingAction) return;
 
                 const result = await chrome.scripting.executeScript({
                     target: { tabId },
@@ -137,11 +140,18 @@ function pollForTargetData(tabId, onTick) {
 
                 const { bankId, csrfToken } = result?.[0]?.result || {};
 
+                if (!bankId) return;
+
+                if (tab.url?.includes("mytargetcirclecard.target.com/home")) {
+                    pendingAction = true;
+                    chrome.tabs.update(tabId, { url: "https://mytargetcirclecard.target.com/account/transaction-history" });
+                    return;
+                }
+
                 if (bankId && csrfToken) {
                     clearInterval(interval);
                     resolve({ bankId, csrfToken });
                 } else if (bankId && !csrfToken) {
-                    // Try fetching CSRF from page source
                     const csrfResult = await chrome.scripting.executeScript({
                         target: { tabId },
                         func: () => fetch(location.href, { credentials: "include" })

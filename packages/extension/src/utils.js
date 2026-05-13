@@ -104,29 +104,43 @@ export function getSyncPlan(lastSyncDates, syncFromDate, key, options = {}) {
 // accountBalance: what Actual should show right now — positive for checking, negative for credit.
 // transactions: all fetched for this sync window (startDate → today Pacific).
 // Invariant: startingBalance + cumulativeTxSum + todayTxSum == accountBalance
-export async function verifyAndSaveStartingBalance(key, { transactions, accountBalance, isFirstSync }) {
+export async function verifyAndSaveStartingBalance(key, { transactions, accountBalance, isFirstSync, trackByIds }) {
     const todayStr = pacificDate(new Date());
     const endDate = offsetDate(todayStr, -1);
+
+    const storageKeys = ["startingBalances", "cumulativeTxSums"];
+    if (trackByIds) storageKeys.push("countedTxIds");
+    else storageKeys.push("balanceCheckEndDates");
 
     const {
         startingBalances = {},
         cumulativeTxSums = {},
+        countedTxIds = {},
         balanceCheckEndDates = {},
-    } = await chrome.storage.local.get(["startingBalances", "cumulativeTxSums", "balanceCheckEndDates"]);
+    } = await chrome.storage.local.get(storageKeys);
 
     const savedStartingBalance = startingBalances[key];
     const isNew = savedStartingBalance === undefined || isFirstSync;
     const prevCumulative = isNew ? 0 : (cumulativeTxSums[key] ?? 0);
-    const prevEndDate = isNew ? undefined : balanceCheckEndDates[key];
 
     const todayTxSum = transactions
         .filter(tx => tx.date === todayStr)
         .reduce((s, tx) => s + tx.amount, 0);
 
-    // Only count transactions not already in prevCumulative (date > prevEndDate, up to yesterday)
-    const newImportedTxSum = transactions
-        .filter(tx => tx.date <= endDate && (prevEndDate === undefined || tx.date > prevEndDate))
-        .reduce((s, tx) => s + tx.amount, 0);
+    let newImportedTxSum;
+    if (trackByIds) {
+        const counted = new Set(isNew ? [] : (countedTxIds[key] ?? []));
+        const newTxs = transactions.filter(tx => tx.date <= endDate && tx.imported_id && !counted.has(tx.imported_id));
+        newImportedTxSum = newTxs.reduce((s, tx) => s + tx.amount, 0);
+        for (const tx of newTxs) counted.add(tx.imported_id);
+        countedTxIds[key] = [...counted];
+    } else {
+        const prevEndDate = isNew ? undefined : balanceCheckEndDates[key];
+        newImportedTxSum = transactions
+            .filter(tx => tx.date <= endDate && (prevEndDate === undefined || tx.date > prevEndDate))
+            .reduce((s, tx) => s + tx.amount, 0);
+        balanceCheckEndDates[key] = endDate;
+    }
 
     const newCumulative = prevCumulative + newImportedTxSum;
 
@@ -134,8 +148,10 @@ export async function verifyAndSaveStartingBalance(key, { transactions, accountB
         const startingBalance = accountBalance - newImportedTxSum - todayTxSum;
         startingBalances[key] = startingBalance;
         cumulativeTxSums[key] = newCumulative;
-        balanceCheckEndDates[key] = endDate;
-        await chrome.storage.local.set({ startingBalances, cumulativeTxSums, balanceCheckEndDates });
+        const save = { startingBalances, cumulativeTxSums };
+        if (trackByIds) save.countedTxIds = countedTxIds;
+        else save.balanceCheckEndDates = balanceCheckEndDates;
+        await chrome.storage.local.set(save);
         return { isNew: true, isFirstSync, changed: false, startingBalance };
     }
 
@@ -153,8 +169,10 @@ export async function verifyAndSaveStartingBalance(key, { transactions, accountB
     }
 
     cumulativeTxSums[key] = newCumulative;
-    balanceCheckEndDates[key] = endDate;
-    await chrome.storage.local.set({ cumulativeTxSums, balanceCheckEndDates });
+    const save = { cumulativeTxSums };
+    if (trackByIds) save.countedTxIds = countedTxIds;
+    else save.balanceCheckEndDates = balanceCheckEndDates;
+    await chrome.storage.local.set(save);
     return { isNew: false, isFirstSync, changed };
 }
 
@@ -229,8 +247,8 @@ export async function updateLastSyncStats(key, transactions) {
 // Calls verifyAndSaveStartingBalance and, on first sync, imports a synthetic starting balance transaction.
 // accountBalance: what Actual should show right now (positive for checking/wallet, negative for credit).
 // transactions: the transactions used for balance math (may be a subset of what was imported, e.g. wallet-only).
-export async function applyStartingBalance(label, key, { settings, accountId, transactions, accountBalance, isFirstSync, startDate, importedId }) {
-    const { startingBalance } = await verifyAndSaveStartingBalance(key, { transactions, accountBalance, isFirstSync });
+export async function applyStartingBalance(label, key, { settings, accountId, transactions, accountBalance, isFirstSync, startDate, importedId, trackByIds }) {
+    const { startingBalance } = await verifyAndSaveStartingBalance(key, { transactions, accountBalance, isFirstSync, trackByIds });
     console.log(`${label}: accountBalance=${accountBalance}${isFirstSync ? ` startingBalance=${startingBalance}` : ""}`);
     if (isFirstSync && startingBalance !== 0) {
         const dayBefore = subtractOneDay(startDate);

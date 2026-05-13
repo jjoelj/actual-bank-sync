@@ -15,12 +15,12 @@ const KNOWN_LOCAL_KEYS = new Set([
   "lastSyncTime", "lastCompletedSyncSessionId", "lastCompletedSyncSummary",
   "activeSyncSessionId", "activeSyncSummary", "nextScheduledSyncAt", "syncFromDate",
   "lastSyncDates", "lastSyncMetrics", "syncErrors",
-  "startingBalances", "cumulativeTxSums", "balanceCheckEndDates", "balanceDrifts",
+  "startingBalances", "cumulativeTxSums", "balanceCheckEndDates", "countedTxIds", "balanceDrifts",
 ]);
 
 const PER_ACCOUNT_KEYS = [
   "lastSyncDates", "lastSyncMetrics", "syncErrors",
-  "startingBalances", "cumulativeTxSums", "balanceCheckEndDates", "balanceDrifts",
+  "startingBalances", "cumulativeTxSums", "balanceCheckEndDates", "countedTxIds", "balanceDrifts",
 ];
 
 function isValidKey(key) {
@@ -564,7 +564,7 @@ function addMappingRow(mappingKey, label, selectedId) {
     persistAddedTypes();
     const [
       { accountMappings = {} }, { lastSyncDates = {} }, { lastSyncMetrics = {} }, { syncErrors = {} },
-      { startingBalances = {} }, { cumulativeTxSums = {} }, { balanceCheckEndDates = {} }, { balanceDrifts = {} },
+      { startingBalances = {} }, { cumulativeTxSums = {} }, { balanceCheckEndDates = {} }, { countedTxIds = {} }, { balanceDrifts = {} },
     ] = await Promise.all([
       chrome.storage.local.get("accountMappings"),
       chrome.storage.local.get("lastSyncDates"),
@@ -573,12 +573,13 @@ function addMappingRow(mappingKey, label, selectedId) {
       chrome.storage.local.get("startingBalances"),
       chrome.storage.local.get("cumulativeTxSums"),
       chrome.storage.local.get("balanceCheckEndDates"),
+      chrome.storage.local.get("countedTxIds"),
       chrome.storage.local.get("balanceDrifts"),
     ]);
-    for (const obj of [accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, startingBalances, cumulativeTxSums, balanceCheckEndDates, balanceDrifts]) {
+    for (const obj of [accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, startingBalances, cumulativeTxSums, balanceCheckEndDates, countedTxIds, balanceDrifts]) {
       delete obj[mappingKey];
     }
-    await chrome.storage.local.set({ accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, startingBalances, cumulativeTxSums, balanceCheckEndDates, balanceDrifts });
+    await chrome.storage.local.set({ accountMappings, lastSyncDates, lastSyncMetrics, syncErrors, startingBalances, cumulativeTxSums, balanceCheckEndDates, countedTxIds, balanceDrifts });
     await renderSyncSummary();
     updateSyncBtn();
   });

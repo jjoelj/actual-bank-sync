@@ -68,7 +68,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
                 console.log(`SoFi ${account.id}: already synced today, skipping.`);
                 continue;
             }
-            const { startDate, endDate: today } = plan;
+            const { startDate } = plan;
 
             console.log(`SoFi ${account.id} fetching: ${startDate} → ${todayStr}`);
             reportProgress(options, mappingKey, 55, "Fetching transactions");
