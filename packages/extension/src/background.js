@@ -296,20 +296,27 @@ async function runSync(options = {}) {
 async function getMergedCategories() {
   const settings = await getStoredSettings();
   const byName = new Map();
+  // `apps` records which apps have the category, so the popup can flag names
+  // that exist in only one of them.
+  const add = (c, app) => {
+    const existing = byName.get(c.name);
+    if (existing) {
+      if (!existing.apps.includes(app)) existing.apps.push(app);
+      existing.parent = existing.parent ?? c.parent ?? null;
+    } else {
+      byName.set(c.name, { ...c, apps: [app] });
+    }
+  };
   if (sureConfigured(settings)) {
     try {
-      for (const c of await sure.getCategories()) {
-        if (!byName.has(c.name)) byName.set(c.name, c);
-      }
+      for (const c of await sure.getCategories()) add(c, "sure");
     } catch (err) {
       console.warn("Failed to load Sure categories:", err.message);
     }
   }
   if (actualConfigured(settings)) {
     try {
-      for (const c of await sendToHost("getCategories", { settings })) {
-        if (!byName.has(c.name)) byName.set(c.name, c);
-      }
+      for (const c of await sendToHost("getCategories", { settings })) add(c, "actual");
     } catch (err) {
       console.warn("Failed to load Actual categories:", err.message);
     }
@@ -322,10 +329,12 @@ async function getMergedCategories() {
 async function createMergedCategory(name) {
   const settings = await getStoredSettings();
   let created = null;
+  const apps = [];
   const errors = [];
   if (sureConfigured(settings)) {
     try {
       created = await sure.createCategory(name);
+      apps.push("sure");
     } catch (err) {
       errors.push(`Sure: ${err.message}`);
     }
@@ -334,13 +343,14 @@ async function createMergedCategory(name) {
     try {
       const c = await sendToHost("createCategory", { settings, name });
       created = created ?? c;
+      apps.push("actual");
     } catch (err) {
       errors.push(`Actual: ${err.message}`);
     }
   }
   if (!created) throw new Error(errors.join("; ") || "No app configured");
   if (errors.length) console.warn("Category created partially:", errors.join("; "));
-  return created;
+  return { ...created, apps };
 }
 
 // ── Per-app transaction maintenance (popup Reset / per-row delete) ───────────

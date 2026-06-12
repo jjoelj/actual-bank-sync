@@ -399,7 +399,7 @@ function buildCategorySelect(currentValue) {
   for (const cat of [...appCategories].sort((a, b) => catLabel(a).localeCompare(catLabel(b)))) {
     const opt = document.createElement("option");
     opt.value = cat.name;
-    opt.textContent = catLabel(cat);
+    opt.textContent = catLabel(cat) + appSuffix(cat);
     select.appendChild(opt);
   }
 
@@ -419,6 +419,14 @@ function buildCategorySelect(currentValue) {
 
 function catLabel(cat) {
   return cat.parent ? `${cat.parent} / ${cat.name}` : cat.name;
+}
+
+// Flag categories that exist in only one app — only meaningful when both apps
+// are configured. Imports to the other app would leave these uncategorized.
+function appSuffix(cat) {
+  if (!sureConfigured || !actualConfigured) return "";
+  if (!cat.apps || cat.apps.length !== 1) return "";
+  return ` — ${APP_LABELS[cat.apps[0]]} only`;
 }
 
 async function renderCategoriesView() {

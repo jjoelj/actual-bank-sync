@@ -100,17 +100,17 @@ try {
         } else if (command === "getAccountBalance") {
             result = await actual.getAccountBalance(rest.accountId);
         } else if (command === "getCategories") {
-            const groups = await actual.getCategoryGroups();
-            const groupName = new Map(groups.map((g) => [g.id, g.name]));
+            // Plain names only — Actual's groups are budgeting structure, not
+            // part of the category identity used for mapping.
             const cats = await actual.getCategories();
-            result = cats.map((c) => ({ id: c.id, name: c.name, parent: groupName.get(c.group_id) ?? null }));
+            result = cats.map((c) => ({ id: c.id, name: c.name, parent: null }));
         } else if (command === "createCategory") {
             const groups = await actual.getCategoryGroups();
-            let group = groups.find((g) => !g.is_income);
+            const group = groups.find((g) => !g.is_income);
             let group_id = group?.id;
             if (!group_id) group_id = await actual.createCategoryGroup({ name: "Bank Sync" });
             const id = await actual.createCategory({ name: rest.name, group_id });
-            result = { id, name: rest.name, parent: group?.name ?? "Bank Sync" };
+            result = { id, name: rest.name, parent: null };
         } else if (command === "getLatestTransactionDate") {
             // Transfers (e.g. card payments) can be dated later than the last
             // real bank transaction, so they're excluded from the watermark.
