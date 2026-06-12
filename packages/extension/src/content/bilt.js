@@ -32,8 +32,11 @@ onMessage("FETCH_BILT_BALANCE", async ({ cardId, accessToken }) => {
 });
 
 onMessage("FETCH_BILT_TRANSACTIONS", async ({ cardId, startDate, endDate, accessToken }) => {
-    const url = `https://api.biltrewards.com/bilt-card/cards/${cardId}/transactions/export?startDate=${startDate}T00:00:00Z&endDate=${endDate}T23:59:59Z`;
-    const attemptFetch = async (attemptsLeft) => {
+    const pageSize = 50;
+    const maxPages = 100;
+    const all = [];
+
+    const attemptFetch = async (url, attemptsLeft) => {
         const res = await fetch(url, {
             headers: {
                 accept: "application/json, text/plain, */*",
@@ -42,12 +45,23 @@ onMessage("FETCH_BILT_TRANSACTIONS", async ({ cardId, startDate, endDate, access
             credentials: "include",
         });
         if (!res.ok) {
-            if (attemptsLeft <= 1) throw new Error(`Bilt export failed: ${res.status}`);
+            if (attemptsLeft <= 1) throw new Error(`Bilt transactions failed: ${res.status}`);
             await new Promise(r => setTimeout(r, 2000));
-            return attemptFetch(attemptsLeft - 1);
+            return attemptFetch(url, attemptsLeft - 1);
         }
-        return res.text();
+        return res.json();
     };
-    const data = await attemptFetch(3);
-    return { data };
+
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex++) {
+        const url = `https://api.biltrewards.com/bilt-card/cards/${cardId}/transactions/v2`
+            + `?startDate=${startDate}T00:00:00Z&endDate=${endDate}T23:59:59Z`
+            + `&pageIndex=${pageIndex}&pageSize=${pageSize}`;
+        const json = await attemptFetch(url, 3);
+        const settled = json.transactions?.settled || [];
+        const pending = json.transactions?.pending || [];
+        all.push(...settled);
+        if (settled.length + pending.length < pageSize) break;
+    }
+
+    return { transactions: all };
 });

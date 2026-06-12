@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Actual Bank Sync",
   "version": "1.0.0",
-  "description": "Automatically syncs bank transactions to Actual Budget",
+  "description": "Automatically syncs bank transactions to Actual Budget and Sure",
 
   "permissions": [
     "storage",
@@ -11,6 +11,10 @@
     "nativeMessaging",
     "scripting",
     "cookies"
+  ],
+
+  "optional_host_permissions": [
+    "https://*/*"
   ],
 
   "host_permissions": [

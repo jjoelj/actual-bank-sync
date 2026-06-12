@@ -7,36 +7,83 @@ onMessage("GET_FIDELITY_DATA", () => {
     return { accessToken, accountToken };
 });
 
-onMessage("FETCH_FIDELITY_TRANSACTIONS", ({ accessToken, accountToken, startDate, endDate }) =>
-    fetch("https://api.usbank.com/partner-services/graphql/v1/downloads", {
-        method: "POST",
-        headers: {
-            accept: "*/*",
-            "accept-language": "en-US,en;q=0.9",
-            "application-id": "RPCTRANDOWNLOADCRDTXN",
-            authorization: `Bearer ${accessToken}`,
-            "content-type": "application/json",
-            "correlation-id": crypto.randomUUID(),
-            customergroupid: "ELAN",
-            customerpartnerid: "fid",
-            customerpartnerloc: "24193",
-            routingkey: "",
-            "service-version": "2",
-        },
-        body: JSON.stringify({
-            requestType: {
-                serviceType: "ACCOUNT_TRANSACTION",
-                serviceSubType: "HISTORY_DOWNLOAD",
+const CREDIT_TX_QUERY = `query creditTransactionDetails($input: CreditTransactionsSearchRequestInput) {
+  creditTransactionDetails(transactionsSearchRequestInput: $input) {
+    creditCardTransactions {
+      transactionUniqueId
+      transactionDateTime
+      effectiveDate
+      postedDateTime
+      transactionAmount
+      debitCredit
+      description
+      transactionType
+      transactionTypeDesc
+      pendingFlag
+      transactionStatus
+      merchantDetails { name }
+      enrichedDetails { category }
+    }
+    _metadata { pageNumber totalPages totalRecords }
+  }
+}`;
+
+onMessage("FETCH_FIDELITY_TRANSACTIONS", async ({ accessToken, accountToken, startDate, endDate }) => {
+    const limit = 500;
+    const maxPages = 200;
+    const all = [];
+    const seen = new Set();
+
+    for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
+        const res = await fetch("https://login.fidelityrewards.com/digital/api/partner-services/graphql/v1", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+                accept: "*/*",
+                "application-id": "RPCADTRAN",
+                authorization: `Bearer ${accessToken}`,
+                "content-type": "application/json",
+                "correlation-id": crypto.randomUUID(),
+                customergroupid: "ELAN",
+                customerpartnerid: "fid",
+                customerpartnerloc: "24193",
+                routingkey: "",
+                "service-version": "2",
             },
-            data: {
-                accountToken,
-                searchBy: [],
-                startTime: startDate,
-                endTime: endDate,
-                fileType: "CSV",
-            },
-        }),
-    })
-        .then(r => r.text())
-        .then(data => ({ data }))
-);
+            body: JSON.stringify({
+                query: CREDIT_TX_QUERY,
+                variables: {
+                    input: {
+                        accountToken,
+                        limit: String(limit),
+                        offset: String((pageNumber - 1) * limit + 1),
+                        pageNumber: String(pageNumber),
+                        startTime: startDate,
+                        endTime: endDate,
+                        extendPayEnable: false,
+                    },
+                },
+            }),
+        });
+        if (!res.ok) throw new Error(`Fidelity transactions failed: ${res.status}`);
+        const json = await res.json();
+        if (json.errors?.length) throw new Error(json.errors[0]?.message || "Fidelity GraphQL error");
+
+        const detail = json?.data?.creditTransactionDetails;
+        const txns = detail?.creditCardTransactions || [];
+
+        let added = 0;
+        for (const tx of txns) {
+            const key = tx.transactionUniqueId || `${tx.transactionDateTime}|${tx.transactionAmount}|${tx.description}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            all.push(tx);
+            added++;
+        }
+
+        const totalPages = Number(detail?._metadata?.totalPages) || 1;
+        if (txns.length < limit || pageNumber >= totalPages || added === 0) break;
+    }
+
+    return { transactions: all };
+});

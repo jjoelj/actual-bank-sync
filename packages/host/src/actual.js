@@ -1,19 +1,21 @@
 import { spawn } from "child_process";
 
-export async function getAccounts(settings) {
-  return runScript(settings, "getAccounts", {});
-}
+// Commands the worker implements; each request spawns a fresh worker so the
+// Actual API never shares state across requests.
+export const COMMANDS = new Set([
+  "testConnection",
+  "getAccounts",
+  "getAccountBalance",
+  "importTransactions",
+  "getCategories",
+  "createCategory",
+  "getLatestTransactionDate",
+  "getTransactionCount",
+  "deleteAllTransactions",
+]);
 
-export async function importTransactions(settings, accountId, transactions) {
-  return runScript(settings, "importTransactions", { accountId, transactions });
-}
-
-export async function getAccountBalance(settings, accountId) {
-  return runScript(settings, "getAccountBalance", { accountId });
-}
-
-export async function testConnection(settings) {
-  return runScript(settings, "testConnection", {});
+export async function runCommand(settings, command, args) {
+  return runScript(settings, command, args);
 }
 
 export async function closeActual() {}

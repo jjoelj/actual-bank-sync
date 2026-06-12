@@ -1,24 +1,14 @@
-import { getSyncPlan, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, applyStartingBalance, subtractOneDay } from "../utils.js";
+import { getSyncPlan, seedLastTxDates, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, subtractOneDay, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncCapitalOne(settings, accountMappings, options = {}) {
     console.log("Capital One: starting");
-    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
+    const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
 
     const allKeys = Object.keys(accountMappings).filter(k => k.startsWith("capitalone-"));
     const syncKeys = options.syncKeys?.length ? options.syncKeys : allKeys;
-    const plans = Object.fromEntries(syncKeys.map(k => {
-        let plan = getSyncPlan(lastSyncDates, syncFromDate, k, options);
-        if (plan && startingBalances[k] === undefined) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
-        return [k, plan];
-    }));
-    const allSyncedToday = syncKeys.length > 0 && syncKeys.every(k => !plans[k]?.shouldSync);
-
-    if (allSyncedToday) {
-        console.log("Capital One: all accounts already synced today, skipping.");
-        return;
-    }
-
-    const activeKeys = syncKeys.filter(k => plans[k]?.shouldSync);
+    await seedLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
+    const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates)]));
+    const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://myaccounts.capitalone.com/accountSummary");
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
@@ -43,15 +33,11 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
     for (const account of caponeAccounts) {
         const mappingKey = `capitalone-${account.id}`;
         if (!syncKeys.includes(mappingKey)) continue;
-        const actualAccountId = accountMappings[mappingKey];
-        if (!actualAccountId) continue;
+        const mapped = accountMappings[mappingKey];
+        if (!mapped) continue;
         const plan = plans[mappingKey];
         if (!plan) {
             console.warn(`Capital One ${account.name}: no sync start date configured, skipping.`);
-            continue;
-        }
-        if (!plan.shouldSync) {
-            console.log(`Capital One ${account.name}: already synced today, skipping.`);
             continue;
         }
         const { startDate, endDate: today } = plan;
@@ -61,19 +47,21 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
 
         try {
             const transactions = await fetchCapitalOneTransactions(account.id, startDate, todayStr);
+            const currentBalance = Math.round(account.presentBalance * 100);
+            const isFirstSync = !lastSyncDates[mappingKey];
+            let result = {};
             if (transactions.length > 0) {
                 reportProgress(options, mappingKey, 80, `Importing ${transactions.length} transactions`);
                 console.log(`Capital One ${account.name}: importing ${transactions.length} transactions.`);
-                await importTransactions(`Capital One ${account.name}`, settings, actualAccountId, transactions);
+                (result = await importTransactions(`Capital One ${account.name}`, settings, mapped, transactions, mappingKey,
+                    (frac, msg) => reportProgress(options, mappingKey, 80 + Math.round(frac * 20), msg)));
             } else {
                 console.log(`Capital One ${account.name}: no new transactions.`);
             }
-            const isFirstSync = !lastSyncDates[mappingKey] || startingBalances[mappingKey] === undefined;
+            logBalanceDrift(`Capital One ${account.name}`, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
+            await applyActualStartingBalance(`Capital One ${account.name}`, settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `capitalone-${account.id}-starting-balance` });
             await updateLastSyncStats(mappingKey, transactions);
             await updateLastSyncDate(mappingKey, today);
-
-            const currentBalance = Math.round(account.presentBalance * 100);
-            await applyStartingBalance(`Capital One ${account.name}`, mappingKey, { settings, accountId: actualAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: `capitalone-${account.id}-starting-balance` });
 
             reportProgress(options, mappingKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
@@ -99,11 +87,13 @@ export async function getCapitalOneAccountsForPopup() {
 function pollForCapitalOneAccounts(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
+        let shownToUser = false;
 
         const interval = setInterval(async () => {
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
+                removeGuard();
                 reject(new Error("Timed out waiting for Capital One accounts"));
                 return;
             }
@@ -111,19 +101,34 @@ function pollForCapitalOneAccounts(tabId, onTick) {
 
             try {
                 const tab = await chrome.tabs.get(tabId);
-                if (tab.status !== "complete") return;
 
-                if (!tab.url?.includes("myaccounts.capitalone.com/accountSummary")) return;
+                if (tab.url && !tab.url.includes("myaccounts.capitalone.com/accountSummary")) {
+                    if (!shownToUser) {
+                        shownToUser = true;
+                        chrome.tabs.update(tabId, { active: true });
+                        chrome.windows.update(tab.windowId, { focused: true });
+                        console.log("Capital One: waiting for login...");
+                    }
+                    return;
+                }
+
+                if (tab.status !== "complete") return;
 
                 const accounts = await fetchCapitalOneAccounts();
                 if (accounts.length > 0) {
                     clearInterval(interval);
+                    removeGuard();
                     resolve(accounts);
                 }
             } catch {
                 // Tab not ready or not logged in yet
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
@@ -199,12 +204,9 @@ async function fetchCapitalOneTransactions(accountId, startDate, endDate) {
             let amount = Math.round(tx.transactionAmount * 100) * (isCredit ? 1 : -1);
             let category = tx.displayCategory;
 
-            let importedId = `capitalone-${date}-${amount}-${category.trim()}`;
-
-            // only remove first instance in case there are multiple (they'll be handled if needed)
-            let idx = allTransactions.findIndex(t => t.imported_id === importedId);
+            let idx = allTransactions.findIndex(t => t.date === date && t.amount === amount && t.category === category.trim());
             if (idx >= 0) {
-                console.log("Removing pending transaction from today:", importedId);
+                console.log("Removing duplicate pending transaction from today");
                 allTransactions.splice(idx, 1);
             }
         }
@@ -240,7 +242,7 @@ function parseCapitalOneCsv(csv) {
             date,
             amount,
             payee_name: description.trim(),
-            notes: category.trim(),
+            category: category.trim(),
             imported_id: `capitalone-${date}-${amount}-${category.trim()}`,
         });
     }

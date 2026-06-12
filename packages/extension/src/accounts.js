@@ -16,6 +16,16 @@ export const BANK_LABELS = {
   wf:          "Wells Fargo",
 };
 
+// Derive the bank id from a mapping key. Banks whose accounts are discovered
+// dynamically use `<bank>-<accountId>` keys; the rest are looked up in ACCOUNT_TYPES.
+export function getBankForKey(key) {
+  if (key.startsWith("sofi-")) return "sofi";
+  if (key.startsWith("capitalone-")) return "capitalone";
+  if (key.startsWith("usbank-")) return "usbank";
+  if (key.startsWith("wf-")) return "wf";
+  return ACCOUNT_TYPES[key]?.bank ?? null;
+}
+
 export const ACCOUNT_TYPES = {
   "sofi-banking":        { label: "Banking",       bank: "sofi" },
   "sofi-credit":         { label: "Credit Card",   bank: "sofi",       optional: true },

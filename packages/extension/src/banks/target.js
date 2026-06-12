@@ -1,23 +1,20 @@
-import { getSyncPlan, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
+import { getSyncPlan, seedLastTxDates, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncTarget(settings, accountMappings, accountKey, options = {}) {
     console.log("Target: starting");
-    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
-    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
+    await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates);
     if (!plan) {
         console.warn("Target: no sync start date configured, skipping.");
-        return;
-    }
-    if (!plan.shouldSync) {
-        console.log("Target: already synced today, skipping.");
         return;
     }
     const { startDate, endDate: today } = plan;
     console.log(`Target sync: ${startDate} → ${today}`);
     reportProgress(options, 15, "Waiting for Target");
 
-    const actualAccountId = accountMappings[accountKey];
-    if (!actualAccountId) return;
+    const mapped = accountMappings[accountKey];
+    if (!mapped) return;
 
     const tab = await openTabBackground("https://mytargetcirclecard.target.com/account/transaction-history");
     chrome.tabs.update(tab.id, { active: true });
@@ -67,24 +64,22 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
         chrome.tabs.remove(tab.id);
     }
 
-    const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
+    const isFirstSync = !lastSyncDates[accountKey];
+    let result = {};
     try {
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Target: importing ${transactions.length} transactions.`);
-            await importTransactions("Target", settings, actualAccountId, transactions);
+            (result = await importTransactions("Target", settings, mapped, transactions, accountKey,
+                (frac, msg) => reportProgress(options, 80 + Math.round(frac * 20), msg)));
         } else {
             console.log("Target: no new transactions.");
         }
-        await updateLastSyncStats(accountKey, transactions);
-
         if (balance != null) {
-            try {
-                await applyStartingBalance("Target", accountKey, { settings, accountId: actualAccountId, transactions, accountBalance: -balance, isFirstSync, startDate, importedId: "target-starting-balance" });
-            } catch (err) {
-                console.warn("Target: failed to verify starting balance:", err.message);
-            }
+            logBalanceDrift("Target", options.appBalances?.[accountKey], result.byApp, -balance);
+            await applyActualStartingBalance("Target", settings, mapped, { bankBalance: -balance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "target-starting-balance" });
         }
+        await updateLastSyncStats(accountKey, transactions);
 
         reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
@@ -118,6 +113,7 @@ function pollForTargetData(tabId, onTick) {
                 if (!dataPageStart) dataPageStart = Date.now();
                 if (Date.now() - dataPageStart > POLL_TIMEOUT_MS) {
                     clearInterval(interval);
+                    removeGuard();
                     reject(new Error("Timed out waiting for Target data"));
                     return;
                 }
@@ -150,6 +146,7 @@ function pollForTargetData(tabId, onTick) {
 
                 if (bankId && csrfToken) {
                     clearInterval(interval);
+                    removeGuard();
                     resolve({ bankId, csrfToken });
                 } else if (bankId && !csrfToken) {
                     const csrfResult = await chrome.scripting.executeScript({
@@ -161,6 +158,7 @@ function pollForTargetData(tabId, onTick) {
                     const csrfFromSource = csrfResult?.[0]?.result;
                     if (bankId && csrfFromSource) {
                         clearInterval(interval);
+                        removeGuard();
                         resolve({ bankId, csrfToken: csrfFromSource });
                     }
                 }
@@ -170,6 +168,11 @@ function pollForTargetData(tabId, onTick) {
                 busy = false;
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
@@ -183,12 +186,16 @@ function parseTargetTransactions(data) {
     }).map(tx => {
         const amount = Math.round(tx.transactionAmount * 100) * -1;
 
+        const cardMasked = tx.transactedPresentationInstrumentIdentifier?.maskedValue
+            || tx.transactionAccountNumber?.maskedValue;
+        const cardLast4 = cardMasked?.slice(-4);
+
         return {
             date: tx.transactionDate,
             amount,
             payee_name: tx.description?.trim(),
-            notes: tx.transactionCode?.display,
-            imported_id: `target-${tx.transactionId}`,
+            notes: cardLast4 ? `**${cardLast4}` : undefined,
+            imported_id: tx.transactionId ? `target-${tx.transactionId}` : undefined,
         };
     });
 }

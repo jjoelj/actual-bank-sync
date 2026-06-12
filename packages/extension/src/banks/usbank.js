@@ -1,24 +1,14 @@
-import { getSyncPlan, pacificDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
+import { getSyncPlan, seedLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncUSBank(settings, accountMappings, options = {}) {
     console.log("US Bank: starting");
-    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
+    const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
 
     const allKeys = Object.keys(accountMappings).filter(k => k.startsWith("usbank-"));
     const syncKeys = options.syncKeys?.length ? options.syncKeys : allKeys;
-    const plans = Object.fromEntries(syncKeys.map(k => {
-        let plan = getSyncPlan(lastSyncDates, syncFromDate, k, options);
-        if (plan && startingBalances[k] === undefined) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
-        return [k, plan];
-    }));
-    const allSyncedToday = syncKeys.length > 0 && syncKeys.every(k => !plans[k]?.shouldSync);
-
-    if (allSyncedToday) {
-        console.log("US Bank: all accounts already synced today, skipping.");
-        return;
-    }
-
-    const activeKeys = syncKeys.filter(k => plans[k]?.shouldSync);
+    await seedLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
+    const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates)]));
+    const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://onlinebanking.usbank.com/auth/login/");
     chrome.tabs.update(tab.id, { active: true });
     chrome.windows.update(tab.windowId, { focused: true });
@@ -75,15 +65,11 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
     for (const account of usbankAccounts) {
         const mappingKey = `usbank-${account.id}`;
         if (!syncKeys.includes(mappingKey)) continue;
-        const actualAccountId = accountMappings[mappingKey];
-        if (!actualAccountId) continue;
+        const mapped = accountMappings[mappingKey];
+        if (!mapped) continue;
         const plan = plans[mappingKey];
         if (!plan) {
             console.warn(`US Bank ${account.name}: no sync start date configured, skipping.`);
-            continue;
-        }
-        if (!plan.shouldSync) {
-            console.log(`US Bank ${account.name}: already synced today, skipping.`);
             continue;
         }
         const { startDate, endDate: today } = plan;
@@ -93,19 +79,21 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
 
         try {
             const transactions = await fetchUSBankTransactions(tab.id, accessToken, afToken, account.accountToken, startDate, todayStr);
+            const currentBalance = Math.round(account.currentBalance * 100);
+            const isFirstSync = !lastSyncDates[mappingKey];
+            let result = {};
             if (transactions.length > 0) {
                 reportProgress(options, mappingKey, 80, `Importing ${transactions.length} transactions`);
                 console.log(`US Bank ${account.name}: importing ${transactions.length} transactions.`);
-                await importTransactions(`US Bank ${account.name}`, settings, actualAccountId, transactions);
+                (result = await importTransactions(`US Bank ${account.name}`, settings, mapped, transactions, mappingKey,
+                    (frac, msg) => reportProgress(options, mappingKey, 80 + Math.round(frac * 20), msg)));
             } else {
                 console.log(`US Bank ${account.name}: no new transactions.`);
             }
-            const isFirstSync = !lastSyncDates[mappingKey] || startingBalances[mappingKey] === undefined;
+            logBalanceDrift(`US Bank ${account.name}`, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
+            await applyActualStartingBalance(`US Bank ${account.name}`, settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance` });
             await updateLastSyncStats(mappingKey, transactions);
             await updateLastSyncDate(mappingKey, today);
-
-            const currentBalance = Math.round(account.currentBalance * 100);
-            await applyStartingBalance(`US Bank ${account.name}`, mappingKey, { settings, accountId: actualAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance` });
 
             reportProgress(options, mappingKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
@@ -161,6 +149,7 @@ function pollForUSBankData(tabId, onTick) {
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
+                removeGuard();
                 reject(new Error("Timed out waiting for US Bank data"));
                 return;
             }
@@ -174,17 +163,24 @@ function pollForUSBankData(tabId, onTick) {
                 const result = await chrome.tabs.sendMessage(tabId, { type: "GET_USBANK_DATA" });
                 if (result?.accessToken && result?.accounts?.length > 0) {
                     clearInterval(interval);
+                    removeGuard();
                     resolve(result);
                 }
             } catch {
                 // Tab not ready or content script not loaded yet
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
 async function fetchUSBankTransactions(tabId, accessToken, afToken, accountToken, startDate, endDate) {
     const allTransactions = [];
+    const seen = new Set();
     let pageNumber = 1;
 
     while (true) {
@@ -199,10 +195,15 @@ async function fetchUSBankTransactions(tabId, accessToken, afToken, accountToken
         });
         if (result.error) throw new Error(result.error);
 
+        let added = 0;
         for (const tx of result.transactions) {
-            const rawDate = tx.postedDateTime;
-            if (!rawDate) continue;
-            const date = rawDate.slice(0, 10);
+            const key = tx.transactionUniqueId || `${tx.postedDateTime}|${tx.transactionAmount}|${tx.description}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            added++;
+
+            const date = toLocalDate(tx.postedDateTime);
+            if (!date) continue;
 
             const amount = Math.round(tx.transactionAmount * 100);
             const isCredit = tx.debitCreditMemo?.toUpperCase()?.startsWith("C");
@@ -212,12 +213,12 @@ async function fetchUSBankTransactions(tabId, accessToken, afToken, accountToken
                 date,
                 amount: signedAmount,
                 payee_name: tx.description?.trim(),
-                notes: tx.enrichedDetails?.category || undefined,
-                imported_id: `usbank-${tx.transactionUniqueId}`,
+                category: tx.enrichedDetails?.category || undefined,
+                imported_id: tx.transactionUniqueId ? `usbank-${tx.transactionUniqueId}` : undefined,
             });
         }
 
-        if (pageNumber >= (result.totalPages || 1)) break;
+        if (pageNumber >= (result.totalPages || 1) || added === 0) break;
         pageNumber++;
     }
 

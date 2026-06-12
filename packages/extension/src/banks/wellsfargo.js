@@ -1,17 +1,12 @@
-import { getSyncPlan, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
+import { getSyncPlan, seedLastTxDates, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
     console.log("Wells Fargo: starting");
-    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
-    const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
-    let plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
+    await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates);
     if (!plan) {
         console.warn("WF: no sync start date configured, skipping.");
-        return;
-    }
-    if (isFirstSync) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
-    if (!plan.shouldSync) {
-        console.log("WF: already synced today, skipping.");
         return;
     }
     const { endDate: today } = plan;
@@ -21,8 +16,8 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
     console.log(`WF sync: ${startDate} → ${today}`);
     reportProgress(options, 15, "Waiting for Wells Fargo");
 
-    const actualAccountId = accountMappings[accountKey];
-    if (!actualAccountId) return;
+    const mapped = accountMappings[accountKey];
+    if (!mapped) return;
 
     const tab = await openTabBackground("https://www.wellsfargo.com/");
     chrome.tabs.update(tab.id, { active: true });
@@ -30,10 +25,11 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
 
     const wfAccountId = accountKey.slice("wf-".length);
 
-    let wfData;
-    let csvData;
+    let transactions = [];
+    let wfBalance = null;
 
     try {
+        let wfData;
         try {
             wfData = await pollForWFData(tab.id, wfAccountId, (t, msg) => {
                 reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
@@ -43,48 +39,58 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
             console.error("WF: login failed, giving up.");
             return;
         }
+        wfBalance = wfData.balance;
 
-        // Format dates as MM/DD/YYYY for WF
-        const fromDate = formatWFDate(startDate);
-        const toDate = formatWFDate(today);
-
-        try {
-            reportProgress(options, 55, "Fetching transactions");
-            const result = await chrome.tabs.sendMessage(tab.id, {
-                type: "FETCH_WF_TRANSACTIONS",
-                accountId: wfData.accountId,
-                xatoken: wfData.xatoken,
-                startDate: fromDate,
-                endDate: toDate,
-            });
-            if (result.error) throw new Error(result.error);
-            csvData = result.data;
-        } catch (err) {
-            console.error("WF fetch failed:", err.message);
+        reportProgress(options, 55, "Fetching transactions");
+        const listRes = await chrome.tabs.sendMessage(tab.id, {
+            type: "FETCH_WF_TRANSACTIONS",
+            reqUrl: wfData.reqUrl,
+        }).catch(() => null);
+        if (!listRes || listRes.error) {
+            console.error("WF fetch failed:", listRes?.error ?? "no response");
             return;
         }
+        const { transactions: base, additionalDetailsUrl } = mapWFTransactions(listRes.data, startDate, today);
+
+        const detailIds = base.filter(t => t.showAdditionalData).map(t => t.id);
+        let categories = {};
+        if (additionalDetailsUrl && detailIds.length) {
+            reportProgress(options, 70, `Fetching ${detailIds.length} categories`);
+            const res = await chrome.tabs.sendMessage(tab.id, {
+                type: "FETCH_WF_CATEGORIES",
+                additionalDetailsUrl,
+                transactionIds: detailIds,
+            }).catch(() => null);
+            categories = res?.categories || {};
+        }
+
+        transactions = base.map(t => ({
+            date: t.date,
+            amount: t.amount,
+            payee_name: t.payee_name,
+            category: categories[t.id] || undefined,
+            imported_id: t.id != null ? `wf-${t.id}` : undefined,
+        }));
     } finally {
         chrome.tabs.remove(tab.id);
     }
 
     try {
-        const transactions = parseWFCsv(csvData);
+        const isFirstSync = !lastSyncDates[accountKey];
+        let result = {};
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`WF: importing ${transactions.length} transactions.`);
-            await importTransactions("WF", settings, actualAccountId, transactions);
+            (result = await importTransactions("WF", settings, mapped, transactions, accountKey,
+                (frac, msg) => reportProgress(options, 80 + Math.round(frac * 20), msg)));
         } else {
             console.log("WF: no new transactions.");
         }
-        await updateLastSyncStats(accountKey, transactions);
-
-        if (wfData.balance != null) {
-            try {
-                await applyStartingBalance("WF", accountKey, { settings, accountId: actualAccountId, transactions, accountBalance: -wfData.balance, isFirstSync, startDate, importedId: "wf-starting-balance" });
-            } catch (err) {
-                console.warn("WF: failed to verify starting balance:", err.message);
-            }
+        if (wfBalance != null) {
+            logBalanceDrift("WF", options.appBalances?.[accountKey], result.byApp, -wfBalance);
+            await applyActualStartingBalance("WF", settings, mapped, { bankBalance: -wfBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "wf-starting-balance" });
         }
+        await updateLastSyncStats(accountKey, transactions);
 
         reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
@@ -96,9 +102,30 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
 
 const WF_STATE_LABELS = {
     "click-card": "Selecting account…",
-    "click-download": "Navigating to download…",
-    "get-data": "Downloading transactions…",
+    "load-transactions": "Loading transactions…",
 };
+
+function installWFInterceptor() {
+    if (window._wfIntercepted) return;
+    window._wfIntercepted = true;
+
+    const isTxnUrl = (url) => typeof url === "string" && url.includes("/transactions/fetch");
+
+    const _fetch = window.fetch;
+    window.fetch = function (...args) {
+        try {
+            const url = typeof args[0] === "string" ? args[0] : args[0]?.url;
+            if (isTxnUrl(url)) window._wfReqUrl = url;
+        } catch {}
+        return _fetch.apply(this, args);
+    };
+
+    const _open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        try { if (isTxnUrl(url)) window._wfReqUrl = url; } catch {}
+        return _open.call(this, method, url, ...rest);
+    };
+}
 
 function pollForWFData(tabId, wfAccountId, onTick) {
     return new Promise((resolve, reject) => {
@@ -106,7 +133,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
         let dataPageStart = null;
         let wfState = "click-card";
         let wfBalance = null;
-        let clickedDownload = false;
+        let interceptorReady = false;
 
         const interval = setInterval(async () => {
             const elapsed = Date.now() - start;
@@ -117,8 +144,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
 
                 const onWFPage = tab.url?.includes("wellsfargo.com") && (
                     tab.url.includes("accountsummary") ||
-                    tab.url.includes("accountdetails") ||
-                    tab.url.includes("download-accountactivity")
+                    tab.url.includes("accountdetails")
                 );
                 if (!onWFPage) {
                     dataPageStart = null;
@@ -128,6 +154,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                 if (!dataPageStart) dataPageStart = Date.now();
                 if (Date.now() - dataPageStart > POLL_TIMEOUT_MS) {
                     clearInterval(interval);
+                    removeGuard();
                     reject(new Error("Timed out waiting for WF data"));
                     return;
                 }
@@ -156,38 +183,49 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                     const payload = result?.[0]?.result;
                     if (payload) {
                         wfBalance = payload.balance;
-                        wfState = "click-download";
+                        wfState = "load-transactions";
                     }
 
-                } else if (wfState === "click-download" && tab.url?.includes("accountdetails")) {
-                    if (!clickedDownload) {
-                        const clicked = await chrome.scripting.executeScript({
+                } else if (wfState === "load-transactions" && tab.url?.includes("accountdetails")) {
+                    if (!interceptorReady) {
+                        await chrome.scripting.executeScript({
                             target: { tabId },
+                            world: "MAIN",
+                            injectImmediately: true,
+                            func: installWFInterceptor,
+                        });
+                        await chrome.scripting.executeScript({
+                            target: { tabId },
+                            world: "MAIN",
                             func: () => {
-                                const btn = document.querySelector('[data-testid="download-account-activity-link"]');
-                                if (btn) { btn.click(); return true; }
-                                return false;
+                                window._wfReqUrl = null;
+                                document.getElementById("filter-ALL")?.click();
                             },
                         });
-                        if (clicked?.[0]?.result) {
-                            clickedDownload = true;
-                            wfState = "get-data";
-                        }
+                        interceptorReady = true;
                     }
 
-                } else if (wfState === "get-data" && tab.url?.includes("download-accountactivity")) {
-                    const urlObj = new URL(tab.url);
-                    const xatoken = urlObj.searchParams.get("_xa");
-                    const accountId = urlObj.searchParams.get("accountId") ?? wfAccountId;
-                    if (xatoken && accountId) {
+                    const result = await chrome.scripting.executeScript({
+                        target: { tabId },
+                        world: "MAIN",
+                        func: () => window._wfReqUrl ?? null,
+                    });
+                    const reqUrl = result?.[0]?.result;
+                    if (reqUrl) {
                         clearInterval(interval);
-                        resolve({ accountId, xatoken, balance: wfBalance });
+                        removeGuard();
+                        resolve({ accountId: wfAccountId, balance: wfBalance, reqUrl });
                     }
                 }
             } catch {
                 // Tab not ready yet
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
@@ -213,6 +251,7 @@ function pollForWFAccounts(tabId) {
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
+                removeGuard();
                 reject(new Error("Timed out waiting for Wells Fargo accounts"));
                 return;
             }
@@ -241,50 +280,47 @@ function pollForWFAccounts(tabId) {
                 const accounts = result?.[0]?.result;
                 if (accounts?.length > 0) {
                     clearInterval(interval);
+                    removeGuard();
                     resolve(accounts);
                 }
             } catch {
                 // Tab not ready yet
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
-function formatWFDate(isoStr) {
-    const [year, month, day] = isoStr.split("-");
-    return `${month}/${day}/${year}`;
-}
+function mapWFTransactions(listResponse, startDate, endDate) {
+    const data = listResponse?.transactions?.transactionData ?? listResponse?.transactionData;
+    const rows = data?.transactions || [];
+    const additionalDetailsUrl = data?.additionalDetailsUrl || null;
 
-function parseWFCsv(csv) {
-    const lines = csv.trim().split("\n");
+    const seen = new Set();
     const transactions = [];
+    for (const tx of rows) {
+        if (seen.has(tx.id)) continue;
+        seen.add(tx.id);
 
-    for (const line of lines) {
-        const cols = parseCsvLine(line);
-        // "DATE","DESCRIPTION","AMOUNT","CHECK #","STATUS"
-        const date = cols[0]?.replace(/"/g, "").trim();
-        const description = cols[1]?.replace(/"/g, "").trim();
-        const amountStr = cols[2]?.replace(/"/g, "").trim();
+        const date = toLocalDate(tx.postDate);
+        if (!date || date < startDate || date > endDate) continue;
 
-        if (!date || !amountStr || date === "DATE") continue;
+        const raw = Number(tx.transactionAmount);
+        if (Number.isNaN(raw)) continue;
 
-        const raw = parseFloat(amountStr);
-        if (isNaN(raw)) continue;
-        // WF: positive = payment/credit, negative = charge
-        const amount = Math.round(raw * 100);
-
+        const sign = String(tx.debitCreditType).toUpperCase() === "CREDIT" ? 1 : -1;
         transactions.push({
-            date: formatISODate(date),
-            amount,
-            payee_name: description,
-            imported_id: `wf-${date}-${amountStr}-${description}`,
+            id: tx.id,
+            showAdditionalData: tx.showAdditionalData,
+            date,
+            amount: Math.round(raw * 100) * sign,
+            payee_name: (tx.transactionDescription || "").trim(),
         });
     }
 
-    return transactions;
-}
-
-function formatISODate(mmddyyyy) {
-    const [month, day, year] = mmddyyyy.split("/");
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    return { transactions, additionalDetailsUrl };
 }

@@ -1,24 +1,29 @@
-import { getDateChunks, getSyncPlan, pacificDate, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, applyStartingBalance } from "../utils.js";
+import { getDateChunks, getSyncPlan, seedLastTxDates, pacificDate, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncSoFi(settings, accountMappings, options = {}) {
     console.log("SoFi: starting");
-    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
+    const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
 
     const allSofiKeys = Object.keys(accountMappings).filter(k => k.startsWith("sofi-"));
     const syncKeys = options.syncKeys?.length ? options.syncKeys : allSofiKeys;
-    const plans = Object.fromEntries(syncKeys.map(k => {
-        let plan = getSyncPlan(lastSyncDates, syncFromDate, k, options);
-        if (plan && startingBalances[k] === undefined) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
-        return [k, plan];
-    }));
-    const allSyncedToday = syncKeys.length > 0 && syncKeys.every(k => !plans[k]?.shouldSync);
-
-    if (allSyncedToday) {
-        console.log("SoFi: all accounts already synced today, skipping.");
-        return;
-    }
-
-    const activeKeys = syncKeys.filter(k => plans[k]?.shouldSync);
+    // SoFi banking accounts are synced as a group: we always fetch and import
+    // *all* mapped banking accounts, not just the requested ones, so
+    // removeMatchedIncomingTransfers can see both sides of an internal transfer
+    // (one side may have already synced today, or only one row may be requested).
+    // Unmapped accounts aren't in accountMappings, so this still only imports
+    // accounts that have a Sure mapping. The credit card is separate and stays
+    // scoped to syncKeys.
+    const bankingKeys = allSofiKeys.filter(k => k !== "sofi-credit");
+    await seedLastTxDates(settings, lastTxDates, accountMappings, Array.from(new Set([...bankingKeys, ...syncKeys])));
+    const plans = Object.fromEntries(bankingKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates)]));
+    const activeKeys = bankingKeys.filter(k => plans[k]);
+    // Fetch every account over one window (the earliest active start date) so
+    // both sides of an internal transfer land in the same batch — that's what
+    // lets removeMatchedIncomingTransfers pair a "From …" with its "To …".
+    // Re-fetched rows that already exist in Sure are deduped on import.
+    const fetchStart = activeKeys.length
+        ? activeKeys.reduce((min, k) => (plans[k].startDate < min ? plans[k].startDate : min), plans[activeKeys[0]].startDate)
+        : null;
     const tab = await openTabBackground("https://www.sofi.com/my/banking/accounts/");
     activeKeys.forEach(k => reportProgress(options, k, 15, "Opening SoFi…"));
 
@@ -56,21 +61,14 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
 
         for (const account of sofiAccounts) {
             const mappingKey = `sofi-${account.id}`;
-            if (!syncKeys.includes(mappingKey)) continue;
-            const actualAccountId = accountMappings[mappingKey];
-            if (!actualAccountId) continue;
+            const mapped = accountMappings[mappingKey];
+            if (!mapped) continue; // no Sure mapping → don't fetch/import
             const plan = plans[mappingKey];
             if (!plan) {
                 console.warn(`SoFi ${account.id}: no sync start date configured, skipping.`);
                 continue;
             }
-            if (!plan.shouldSync) {
-                console.log(`SoFi ${account.id}: already synced today, skipping.`);
-                continue;
-            }
-            const { startDate } = plan;
-
-            console.log(`SoFi ${account.id} fetching: ${startDate} → ${todayStr}`);
+            console.log(`SoFi ${account.id} fetching: ${fetchStart} → ${todayStr}`);
             reportProgress(options, mappingKey, 55, "Fetching transactions");
 
             try {
@@ -78,7 +76,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
                     type: "FETCH_SOFI_TRANSACTIONS",
                     accountId: account.queryId,
                     csrfToken,
-                    startDate,
+                    startDate: fetchStart,
                     endDate: todayStr,
                 });
                 if (result.error) throw new Error(result.error);
@@ -94,7 +92,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
                     balance = balanceResult.balance;
                 }
 
-                fetchedData.push({ account, mappingKey, actualAccountId, plan, transactions: result.transactions, balance });
+                fetchedData.push({ account, mappingKey, mapped, plan, transactions: result.transactions, balance });
             } catch (err) {
                 console.error(`SoFi account ${account.id} fetch failed:`, err.message);
             }
@@ -103,25 +101,61 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
         chrome.tabs.remove(tab.id);
     }
 
-    // Phase 2: import (tab already closed)
-    for (const { account, mappingKey, actualAccountId, plan, transactions, balance } of fetchedData) {
+    // Drop the incoming side of internal transfers: a "From …" transaction is a
+    // transfer only when a matching "To …" exists in a *different* account (same
+    // date, opposite amount — SoFi posts both sides instantly). The outgoing
+    // "To …" side is kept and imported; a user-defined rule in each app turns it
+    // into a transfer that creates the counterpart (the apps' auto-matching is
+    // too unreliable to import both raw sides).
+    removeMatchedIncomingTransfers(fetchedData);
+
+    // Phase 2: import (tab already closed). A user-defined rule (required setup,
+    // see README) creates the matching inflow whenever a "To …" transfer is
+    // imported, so import every account's "To …" rows first and let those
+    // imports finish before importing anything else — by the time the remaining
+    // rows land, the rule-generated other side already exists (and our own
+    // "From …" duplicate was dropped above).
+    const isToTransfer = (tx) => typeof tx.payee_name === "string" && tx.payee_name.startsWith("To ");
+    const batches = fetchedData.map(data => ({
+        ...data,
+        toTxns: data.transactions.filter(isToTransfer),
+        restTxns: data.transactions.filter(tx => !isToTransfer(tx)),
+    }));
+    const addedByKey = {};
+
+    // Pass 1: all "To …" transfers, so Sure creates each matching other side.
+    for (const { account, mappingKey, mapped, toTxns } of batches) {
+        if (toTxns.length === 0) continue;
+        try {
+            reportProgress(options, mappingKey, 75, `Importing ${toTxns.length} transfer${toTxns.length === 1 ? "" : "s"}`);
+            console.log(`SoFi ${account.id}: importing ${toTxns.length} "To …" transfer(s) first.`);
+            const result = await importTransactions(`SoFi ${account.id}`, settings, mapped, toTxns, mappingKey,
+                (frac, msg) => reportProgress(options, mappingKey, 75 + Math.round(frac * 10), msg));
+            accumulateAdded(addedByKey, mappingKey, result.byApp);
+        } catch (err) {
+            console.error(`SoFi account ${account.id} transfer import failed:`, err.message);
+        }
+    }
+
+    // Pass 2: everything else, plus per-account bookkeeping over the full set.
+    for (const { account, mappingKey, mapped, plan, transactions, restTxns, balance } of batches) {
         const { startDate, endDate: today } = plan;
         try {
-            await updateLastSyncDate(mappingKey, today);
-            await updateLastSyncStats(mappingKey, transactions);
-
-            if (transactions.length > 0) {
-                reportProgress(options, mappingKey, 80, `Importing ${transactions.length} transactions`);
-                console.log(`SoFi ${account.id}: importing ${transactions.length} transactions.`);
-                await importTransactions(`SoFi ${account.id}`, settings, actualAccountId, transactions);
-            } else {
+            if (restTxns.length > 0) {
+                reportProgress(options, mappingKey, 85, `Importing ${restTxns.length} transactions`);
+                console.log(`SoFi ${account.id}: importing ${restTxns.length} transactions.`);
+                const result = await importTransactions(`SoFi ${account.id}`, settings, mapped, restTxns, mappingKey,
+                    (frac, msg) => reportProgress(options, mappingKey, 85 + Math.round(frac * 15), msg));
+                accumulateAdded(addedByKey, mappingKey, result.byApp);
+            } else if (transactions.length === 0) {
                 console.log(`SoFi ${account.id}: no new transactions.`);
             }
-
             if (balance != null) {
-                const isFirstSync = !lastSyncDates[mappingKey] || startingBalances[mappingKey] === undefined;
-                await applyStartingBalance(`SoFi ${account.id}`, mappingKey, { settings, accountId: actualAccountId, transactions, accountBalance: balance, isFirstSync, startDate, importedId: `sofi-${account.id}-starting-balance` });
+                logBalanceDrift(`SoFi ${account.id}`, options.appBalances?.[mappingKey], addedByKey[mappingKey], balance);
+                await applyActualStartingBalance(`SoFi ${account.id}`, settings, mapped, { bankBalance: balance, appBalances: options.appBalances?.[mappingKey], byApp: addedByKey[mappingKey], isFirstSync: !lastSyncDates[mappingKey], startDate, importedId: `sofi-${account.id}-starting-balance` });
             }
+            await updateLastSyncStats(mappingKey, transactions);
+            await updateLastSyncDate(mappingKey, today);
 
             reportProgress(options, mappingKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
@@ -132,40 +166,40 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     const creditKey = "sofi-credit";
     const creditActualId = accountMappings[creditKey];
     scope: if (creditActualId && syncKeys.includes(creditKey)) {
-        const isFirstSync = !lastSyncDates[creditKey] || startingBalances[creditKey] === undefined;
-        let creditPlan = getSyncPlan(lastSyncDates, syncFromDate, creditKey, options);
+        const creditPlan = getSyncPlan(lastSyncDates, syncFromDate, creditKey, lastTxDates);
         if (!creditPlan) {
             console.warn(`SoFi Credit: no sync start date configured, skipping.`);
-            break scope
-        }
-        if (isFirstSync) creditPlan = { ...creditPlan, shouldSync: true, startDate: syncFromDate ?? creditPlan.startDate };
-        if (!creditPlan.shouldSync) {
-            console.log(`SoFi Credit: already synced today, skipping.`);
             break scope
         }
         const { startDate, endDate: today } = creditPlan;
 
         console.log(`SoFi Credit sync: ${startDate} → ${todayStr}`);
 
+        let currentBalance = null;
+        try {
+            currentBalance = await fetchSoFiCreditBalance();
+        } catch (err) {
+            console.warn("SoFi Credit: failed to fetch balance:", err.message);
+        }
+
+        let result = {};
         try {
             reportProgress(options, creditKey, 55, "Fetching transactions");
             const transactions = await fetchSoFiCreditTransactions(startDate, todayStr);
             if (transactions.length > 0) {
                 reportProgress(options, creditKey, 80, `Importing ${transactions.length} transactions`);
                 console.log(`SoFi credit: importing ${transactions.length} transactions.`);
-                await importTransactions("SoFi Credit", settings, creditActualId, transactions);
+                (result = await importTransactions("SoFi Credit", settings, creditActualId, transactions, creditKey,
+                    (frac, msg) => reportProgress(options, creditKey, 80 + Math.round(frac * 20), msg)));
             } else {
                 console.log("SoFi credit: no new transactions.");
             }
+            if (currentBalance != null) {
+                logBalanceDrift("SoFi Credit", options.appBalances?.[creditKey], result.byApp, -currentBalance);
+                await applyActualStartingBalance("SoFi Credit", settings, creditActualId, { bankBalance: -currentBalance, appBalances: options.appBalances?.[creditKey], byApp: result.byApp, isFirstSync: !lastSyncDates[creditKey], startDate, importedId: "sofi-credit-starting-balance" });
+            }
             await updateLastSyncStats(creditKey, transactions);
             await updateLastSyncDate(creditKey, today);
-
-            try {
-                const currentBalance = await fetchSoFiCreditBalance();
-                await applyStartingBalance("SoFi Credit", creditKey, { settings, accountId: creditActualId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: "sofi-credit-starting-balance" });
-            } catch (err) {
-                console.warn("SoFi credit: failed to verify starting balance:", err.message);
-            }
 
             reportProgress(options, creditKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
@@ -233,14 +267,14 @@ function parseSoFiCreditCsv(csv) {
         const amount = Math.round(parseFloat(amountStr) * 100) * -1;
         if (!postDate || !postDate.trim()) continue;
         const date = postDate.trim();
-        const importedId = `sofi-credit-${date}-${amountStr.trim()}-${description.trim()}`;
 
         transactions.push({
             date,
             amount,
             payee_name: description.trim(),
-            notes: `${type.trim()} · ${category.trim()}`,
-            imported_id: importedId,
+            category: category.trim() || undefined,
+            notes: type.trim() || undefined,
+            imported_id: `sofi-credit-${date}-${amountStr.trim()}-${description.trim()}`,
         });
     }
 
@@ -256,6 +290,7 @@ function pollForApolloState(tabId, onTick) {
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
+                removeGuard();
                 reject(new Error("Timed out waiting for Apollo state"));
                 return;
             }
@@ -295,12 +330,18 @@ function pollForApolloState(tabId, onTick) {
                     k.startsWith("CheckingAccount") || k.startsWith("SavingsAccount")
                 )) {
                     clearInterval(interval);
+                    removeGuard();
                     resolve(apolloState);
                 }
             } catch {
                 // Tab not ready yet
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
@@ -316,6 +357,47 @@ function getCsrfFromTab(tabId) {
             }
         });
     });
+}
+
+// Accumulate per-app addedSum across the two import passes so the final
+// balance-drift check sees everything this sync added for the account.
+function accumulateAdded(addedByKey, key, byApp = {}) {
+    const acc = addedByKey[key] ??= {};
+    for (const [app, r] of Object.entries(byApp)) {
+        (acc[app] ??= { addedSum: 0 }).addedSum += r?.addedSum ?? 0;
+    }
+}
+
+// Remove the incoming ("From …") side of internal transfers by pairing it with
+// an outgoing ("To …") side in a different account: same date, opposite amount.
+// Matches are consumed so multiple same-day/same-amount transfers pair 1:1, and
+// a "From …" with no matching "To …" (e.g. the other account isn't synced) is
+// kept as a real inflow.
+function removeMatchedIncomingTransfers(fetchedData) {
+    const toByKey = new Map(); // `${date}|${amount}` -> [mappingKey, ...]
+    for (const { mappingKey, transactions } of fetchedData) {
+        for (const tx of transactions) {
+            if (typeof tx.payee_name === "string" && tx.payee_name.startsWith("To ")) {
+                const key = `${tx.date}|${tx.amount}`;
+                if (!toByKey.has(key)) toByKey.set(key, []);
+                toByKey.get(key).push(mappingKey);
+            }
+        }
+    }
+
+    for (const data of fetchedData) {
+        let removed = 0;
+        data.transactions = data.transactions.filter(tx => {
+            if (typeof tx.payee_name !== "string" || !tx.payee_name.startsWith("From ")) return true;
+            const candidates = toByKey.get(`${tx.date}|${-tx.amount}`);
+            const idx = candidates ? candidates.findIndex(k => k !== data.mappingKey) : -1;
+            if (idx < 0) return true; // no matching "To" in another account → real inflow, keep
+            candidates.splice(idx, 1); // consume so each "To" pairs with one "From"
+            removed++;
+            return false;
+        });
+        if (removed) console.log(`SoFi ${data.account.id}: dropped ${removed} incoming transfer(s) matched to a "To" in another account.`);
+    }
 }
 
 function extractSoFiAccounts(apolloState) {

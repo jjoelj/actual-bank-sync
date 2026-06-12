@@ -1,4 +1,4 @@
-import { getAccounts, getAccountBalance, importTransactions, testConnection, closeActual } from "./actual.js";
+import { COMMANDS, runCommand, closeActual } from "./actual.js";
 
 async function main() {
   process.stdin.resume();
@@ -11,14 +11,8 @@ async function main() {
   let error = null;
 
   try {
-    if (command === "getAccounts") {
-      result = await getAccounts(settings);
-    } else if (command === "importTransactions") {
-      result = await importTransactions(settings, rest.accountId, rest.transactions);
-    } else if (command === "getAccountBalance") {
-      result = await getAccountBalance(settings, rest.accountId);
-    } else if (command === "testConnection") {
-      result = await testConnection(settings);
+    if (COMMANDS.has(command)) {
+      result = await runCommand(settings, command, rest);
     } else {
       error = `Unknown command: ${command}`;
     }

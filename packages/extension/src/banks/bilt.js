@@ -1,17 +1,12 @@
-import { getSyncPlan, pacificDate, openTabBackground, parseCsvLine, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, applyStartingBalance } from "../utils.js";
+import { getSyncPlan, seedLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncBilt(settings, accountMappings, accountKey, options = {}) {
     console.log("Bilt: starting");
-    const { lastSyncDates = {}, syncFromDate, startingBalances = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "startingBalances"]);
-    const isFirstSync = !lastSyncDates[accountKey] || startingBalances[accountKey] === undefined;
-    let plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, options);
+    const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
+    await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates);
     if (!plan) {
         console.warn("Bilt: no sync start date configured, skipping.");
-        return;
-    }
-    if (isFirstSync) plan = { ...plan, shouldSync: true, startDate: syncFromDate ?? plan.startDate };
-    if (!plan.shouldSync) {
-        console.log("Bilt: already synced today, skipping.");
         return;
     }
     const { startDate, endDate: today } = plan;
@@ -20,8 +15,8 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     console.log(`Bilt sync: ${startDate} → ${fetchEnd}`);
     reportProgress(options, 15, "Waiting for Bilt");
 
-    const actualAccountId = accountMappings[accountKey];
-    if (!actualAccountId) return;
+    const mapped = accountMappings[accountKey];
+    if (!mapped) return;
 
     const tab = await openTabBackground("https://www.bilt.com/wallet");
 
@@ -51,7 +46,7 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
                     accessToken: biltData.accessToken,
                 });
                 if (fetchResult.error) throw new Error(fetchResult.error);
-                transactions.push(...parseBiltCsv(fetchResult.data));
+                transactions.push(...mapBiltTransactions(fetchResult.transactions));
             }
         } catch (err) {
             console.error("Bilt fetch failed:", err.message);
@@ -72,19 +67,22 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
         chrome.tabs.remove(tab.id);
     }
 
+    const isFirstSync = !lastSyncDates[accountKey];
+    let result = {};
     if (transactions.length > 0) {
         reportProgress(options, 80, `Importing ${transactions.length} transactions`);
         console.log(`Bilt: importing ${transactions.length} transactions.`);
-        await importTransactions("Bilt", settings, actualAccountId, transactions);
+        (result = await importTransactions("Bilt", settings, mapped, transactions, accountKey,
+            (frac, msg) => reportProgress(options, 80 + Math.round(frac * 20), msg)));
     } else {
         console.log("Bilt: no new transactions.");
     }
+    if (currentBalance != null) {
+        logBalanceDrift("Bilt", options.appBalances?.[accountKey], result.byApp, -currentBalance);
+        await applyActualStartingBalance("Bilt", settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "bilt-starting-balance" });
+    }
     await updateLastSyncStats(accountKey, transactions);
     await updateLastSyncDate(accountKey, today);
-
-    if (currentBalance != null) {
-        await applyStartingBalance("Bilt", accountKey, { settings, accountId: actualAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: "bilt-starting-balance" });
-    }
 
     reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
 }
@@ -98,6 +96,7 @@ function pollForBiltData(tabId, onTick) {
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
+                removeGuard();
                 reject(new Error("Timed out waiting for Bilt data"));
                 return;
             }
@@ -107,38 +106,39 @@ function pollForBiltData(tabId, onTick) {
                 const response = await chrome.tabs.sendMessage(tabId, { type: "GET_BILT_DATA" });
                 if (response?.accessToken && response?.cardId) {
                     clearInterval(interval);
+                    removeGuard();
                     resolve(response);
                 }
             } catch {
                 // Tab not ready yet
             }
         }, POLL_INTERVAL_MS);
+
+        const removeGuard = onTabClose(tabId, () => {
+            clearInterval(interval);
+            reject(new Error("Browser window closed"));
+        });
     });
 }
 
-function parseBiltCsv(csv) {
-    const lines = csv.trim().split("\n");
-    if (lines.length < 2) return [];
-
+function mapBiltTransactions(rawTransactions) {
     const transactions = [];
 
-    for (let i = 1; i < lines.length; i++) {
-        const cols = parseCsvLine(lines[i]);
-        // Transaction Date,Posted Date,Description,Amount,Card Last 4,Name on Card,Raw Merchant Name
-        const [txDate, postedDate, description, amountStr] = cols;
+    for (const tx of rawTransactions || []) {
+        const date = toLocalDate(tx.updatedAt);
+        const amountNum = parseFloat(tx.amount?.amount);
+        if (!date || Number.isNaN(amountNum)) continue;
 
-        if (!amountStr || !txDate) continue;
-
-        const amount = Math.round(parseFloat(amountStr) * 100) * -1;
-        if (!postedDate || !postedDate.trim()) continue;
-        const date = postedDate.trim();
-        const importedId = `bilt-${date}-${amountStr.trim()}-${description.trim()}`;
+        const payee = tx.description || tx.merchant?.name || "Unknown";
+        const payeeName = typeof payee === "string" ? payee.trim() : "Unknown";
+        const amount = Math.round(amountNum * 100) * -1;
 
         transactions.push({
             date,
             amount,
-            payee_name: description.trim(),
-            imported_id: importedId,
+            payee_name: payeeName,
+            category: tx.merchant?.category || tx.displayCategory || undefined,
+            imported_id: tx.id != null ? `bilt-${tx.id}` : `bilt-${date}-${amount}-${payeeName}`,
         });
     }
 
