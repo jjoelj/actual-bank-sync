@@ -4,7 +4,7 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     console.log("Bilt: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
     await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
-    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates);
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates, accountMappings[accountKey]);
     if (!plan) {
         console.warn("Bilt: no sync start date configured, skipping.");
         return;

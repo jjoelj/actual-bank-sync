@@ -15,7 +15,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     // scoped to syncKeys.
     const bankingKeys = allSofiKeys.filter(k => k !== "sofi-credit");
     await seedLastTxDates(settings, lastTxDates, accountMappings, Array.from(new Set([...bankingKeys, ...syncKeys])));
-    const plans = Object.fromEntries(bankingKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates)]));
+    const plans = Object.fromEntries(bankingKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = bankingKeys.filter(k => plans[k]);
     // Fetch every account over one window (the earliest active start date) so
     // both sides of an internal transfer land in the same batch — that's what
@@ -166,7 +166,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     const creditKey = "sofi-credit";
     const creditActualId = accountMappings[creditKey];
     scope: if (creditActualId && syncKeys.includes(creditKey)) {
-        const creditPlan = getSyncPlan(lastSyncDates, syncFromDate, creditKey, lastTxDates);
+        const creditPlan = getSyncPlan(lastSyncDates, syncFromDate, creditKey, lastTxDates, creditActualId);
         if (!creditPlan) {
             console.warn(`SoFi Credit: no sync start date configured, skipping.`);
             break scope

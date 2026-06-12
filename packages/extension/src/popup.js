@@ -1376,7 +1376,7 @@ async function renderSyncStatus() {
 
     const rangeEl = document.getElementById(`range-${key}`);
     if (rangeEl) {
-      const plan = isMapped ? getSyncPlan(lastSyncDates, syncFromDate, key, lastTxDates) : null;
+      const plan = isMapped ? getSyncPlan(lastSyncDates, syncFromDate, key, lastTxDates, accountMappings[key]) : null;
       rangeEl.textContent = plan ? `${formatRangeDate(plan.startDate)} → ${formatRangeDate(plan.endDate)}` : "";
     }
 

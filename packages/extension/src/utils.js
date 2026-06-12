@@ -15,6 +15,8 @@ import { getBankForKey } from './accounts.js';
 // Sure, Actual, or both. Legacy values (a bare Actual account id string) are
 // normalized here and migrated in storage by migrateAccountMappings().
 
+export const APPS = ["sure", "actual"];
+
 export function appTargets(mapping) {
     if (!mapping) return {};
     if (typeof mapping === "string") return { actual: mapping };
@@ -409,42 +411,70 @@ export function offsetDate(isoStr, days) {
     return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
-// Seed each key's sync watermark from the apps themselves: the earliest of the
-// mapped apps' latest-transaction dates, so neither app misses the gap between
-// its own last import and the other's.
+// Watermarks are per app: lastTxDates[key] = { sure?, actual? } where a date is
+// that app's latest known transaction, null means the app has no transactions
+// yet (needs full history), and a missing field means unknown (seed it).
+// Legacy entries are a bare date string — the shared watermark from before
+// per-app tracking — and apply to every app mapped at migration time.
+function normalizeTxEntry(value, target) {
+    if (value == null) return {};
+    if (typeof value === "string") {
+        const entry = {};
+        for (const app of APPS) if (target[app]) entry[app] = value;
+        return entry;
+    }
+    return { ...value };
+}
+
+// Seed each mapped app's watermark from the app itself (its latest transaction
+// date, or null when it has none). Only unknown apps are queried, so a newly
+// mapped app gets seeded even when the other app already has a watermark.
 export async function seedLastTxDates(settings, lastTxDates, accountMappings, keys) {
     let updated = false;
     for (const key of keys) {
-        if (lastTxDates[key]) continue;
         const target = appTargets(accountMappings[key]);
-        const dates = [];
-        if (target.sure) {
+        const entry = normalizeTxEntry(lastTxDates[key], target);
+        if (typeof lastTxDates[key] === "string") updated = true;
+        if (target.sure && entry.sure === undefined) {
             try {
-                const date = await getLatestTransactionDate(target.sure);
-                if (date) dates.push(date);
+                entry.sure = (await getLatestTransactionDate(target.sure)) ?? null;
+                updated = true;
             } catch (err) {
                 console.warn(`Failed to seed lastTxDate for ${key} from Sure:`, err.message);
             }
         }
-        if (target.actual) {
+        if (target.actual && entry.actual === undefined) {
             try {
-                const date = await sendToHost("getLatestTransactionDate", { settings, accountId: target.actual });
-                if (date) dates.push(date);
+                entry.actual = (await sendToHost("getLatestTransactionDate", { settings, accountId: target.actual })) ?? null;
+                updated = true;
             } catch (err) {
                 console.warn(`Failed to seed lastTxDate for ${key} from Actual:`, err.message);
             }
         }
-        if (dates.length) {
-            lastTxDates[key] = dates.reduce((a, b) => (a < b ? a : b));
-            updated = true;
-        }
+        lastTxDates[key] = entry;
     }
     if (updated) await chrome.storage.local.set({ lastTxDates });
 }
 
-export function getSyncPlan(lastSyncDates, syncFromDate, key, lastTxDates = {}) {
+// The sync window starts at the earliest date any mapped app needs: its own
+// watermark, full history (syncFromDate) when the app has no transactions yet,
+// or the legacy fallbacks when its watermark is unknown.
+export function getSyncPlan(lastSyncDates, syncFromDate, key, lastTxDates = {}, mapping) {
     const endDate = pacificDate(new Date());
-    const startDate = lastTxDates[key] || lastSyncDates[key] || syncFromDate;
+    const target = appTargets(mapping);
+    const apps = APPS.filter(a => target[a]);
+    const entry = normalizeTxEntry(lastTxDates[key], target);
+
+    let startDate;
+    if (apps.length) {
+        const dates = apps.map(app =>
+            entry[app] === null ? syncFromDate : (entry[app] ?? (lastSyncDates[key] || syncFromDate)));
+        startDate = dates.some(d => !d) ? null : dates.reduce((a, b) => (a < b ? a : b));
+    } else {
+        const entryDates = Object.values(entry).filter(Boolean);
+        startDate = (entryDates.length ? entryDates.reduce((a, b) => (a < b ? a : b)) : null)
+            || lastSyncDates[key] || syncFromDate;
+    }
     if (!startDate) return null;
 
     return { startDate, endDate };
@@ -489,11 +519,12 @@ export async function updateLastSyncDate(key, date) {
 }
 
 export async function updateLastSyncMetrics(key, transactions) {
-    const { lastSyncMetrics = {}, activeSyncSessionId = null, activeSyncSummary = null, lastTxDates = {} } = await chrome.storage.local.get([
+    const { lastSyncMetrics = {}, activeSyncSessionId = null, activeSyncSummary = null, lastTxDates = {}, accountMappings = {} } = await chrome.storage.local.get([
         "lastSyncMetrics",
         "activeSyncSessionId",
         "activeSyncSummary",
         "lastTxDates",
+        "accountMappings",
     ]);
 
     const metrics = {
@@ -524,7 +555,14 @@ export async function updateLastSyncMetrics(key, transactions) {
         for (const tx of transactions) {
             if (tx.date > maxDate) maxDate = tx.date;
         }
-        lastTxDates[key] = maxDate;
+        // Advance the watermark for every app the key currently maps to — this
+        // runs only after a successful import to all of them.
+        const target = appTargets(accountMappings[key]);
+        const entry = normalizeTxEntry(lastTxDates[key], target);
+        for (const app of APPS) {
+            if (target[app]) entry[app] = maxDate;
+        }
+        lastTxDates[key] = entry;
         updates.lastTxDates = lastTxDates;
     } else if (!lastSyncMetrics[key]) {
         lastSyncMetrics[key] = metrics;

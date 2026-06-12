@@ -7,8 +7,8 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
 
     const cashAccountId = accountMappings["venmo-cash"];
     const creditAccountId = accountMappings["venmo-credit"];
-    const cashPlan = cashAccountId ? getSyncPlan(lastSyncDates, syncFromDate, "venmo-cash", lastTxDates) : null;
-    const creditPlan = creditAccountId ? getSyncPlan(lastSyncDates, syncFromDate, "venmo-credit", lastTxDates) : null;
+    const cashPlan = cashAccountId ? getSyncPlan(lastSyncDates, syncFromDate, "venmo-cash", lastTxDates, cashAccountId) : null;
+    const creditPlan = creditAccountId ? getSyncPlan(lastSyncDates, syncFromDate, "venmo-credit", lastTxDates, creditAccountId) : null;
     const needsCash = cashAccountId && cashPlan;
     const needsCredit = creditAccountId && creditPlan;
 

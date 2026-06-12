@@ -7,7 +7,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
     const allKeys = Object.keys(accountMappings).filter(k => k.startsWith("usbank-"));
     const syncKeys = options.syncKeys?.length ? options.syncKeys : allKeys;
     await seedLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
-    const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates)]));
+    const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://onlinebanking.usbank.com/auth/login/");
     chrome.tabs.update(tab.id, { active: true });

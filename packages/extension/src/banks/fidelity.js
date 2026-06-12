@@ -4,7 +4,7 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
     console.log("Fidelity: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
     await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
-    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates);
+    const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates, accountMappings[accountKey]);
     if (!plan) {
         console.warn("Fidelity: no sync start date configured, skipping.");
         return;
