@@ -46,6 +46,8 @@ try {
                 if (r?.updated) updated.push(...r.updated);
             }
             result = { added, updated };
+        } else if (command === "getAccountBalance") {
+            result = await actual.getAccountBalance(rest.accountId);
         }
     }
 

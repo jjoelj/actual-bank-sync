@@ -201,9 +201,11 @@ async function fetchSoFiCreditTransactions(startDate, endDate) {
             credentials: "include",
         });
 
+        if (response.status === 400) {
+            console.log("SoFi Credit: no transactions for chunk", chunkStart, "→", chunkEnd);
+            continue;
+        }
         if (!response.ok) {
-            const text = await response.text();
-            if (text.includes("No transactions found")) return [];
             throw new Error(`SoFi credit export failed: ${response.status}`);
         }
 
@@ -269,18 +271,6 @@ function pollForApolloState(tabId, onTick) {
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { focused: true });
                         console.log("SoFi: waiting for login...");
-                    }
-                    if (tab.status === "complete" && tab.url.includes("login.sofi.com")) {
-                        await chrome.scripting.executeScript({
-                            target: { tabId },
-                            func: () => {
-                                const pw = document.querySelector('input#password');
-                                if (!pw) return;
-                                if (!pw.value) return;
-                                const btn = document.querySelector('button[data-action-button-primary="true"]');
-                                if (btn && !btn.disabled) btn.click();
-                            },
-                        });
                     }
                     return;
                 }

@@ -8,6 +8,10 @@ export async function importTransactions(settings, accountId, transactions) {
   return runScript(settings, "importTransactions", { accountId, transactions });
 }
 
+export async function getAccountBalance(settings, accountId) {
+  return runScript(settings, "getAccountBalance", { accountId });
+}
+
 export async function testConnection(settings) {
   return runScript(settings, "testConnection", {});
 }

@@ -1,4 +1,4 @@
-import { getAccounts, importTransactions, testConnection, closeActual } from "./actual.js";
+import { getAccounts, getAccountBalance, importTransactions, testConnection, closeActual } from "./actual.js";
 
 async function main() {
   process.stdin.resume();
@@ -15,6 +15,8 @@ async function main() {
       result = await getAccounts(settings);
     } else if (command === "importTransactions") {
       result = await importTransactions(settings, rest.accountId, rest.transactions);
+    } else if (command === "getAccountBalance") {
+      result = await getAccountBalance(settings, rest.accountId);
     } else if (command === "testConnection") {
       result = await testConnection(settings);
     } else {

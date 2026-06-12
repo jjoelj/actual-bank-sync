@@ -105,7 +105,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
             await updateLastSyncDate(mappingKey, today);
 
             const currentBalance = Math.round(account.currentBalance * 100);
-            await applyStartingBalance(`US Bank ${account.name}`, mappingKey, { settings, accountId: actualAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance`, trackByIds: true });
+            await applyStartingBalance(`US Bank ${account.name}`, mappingKey, { settings, accountId: actualAccountId, transactions, accountBalance: -currentBalance, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance` });
 
             reportProgress(options, mappingKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
