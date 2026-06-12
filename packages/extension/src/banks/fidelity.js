@@ -83,8 +83,8 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
             console.log("Fidelity: no new transactions.");
         }
         if (currentBalance != null) {
-            logBalanceDrift("Fidelity", options.appBalances?.[accountKey], result.byApp, -currentBalance);
-            await applyActualStartingBalance("Fidelity", settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "fidelity-starting-balance" });
+            await logBalanceDrift("Fidelity", accountKey, options.appBalances?.[accountKey], result.byApp, -currentBalance);
+            await applyActualStartingBalance("Fidelity", settings, mapped, { mappingKey: accountKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "fidelity-starting-balance" });
         }
         await updateLastSyncStats(accountKey, transactions);
 

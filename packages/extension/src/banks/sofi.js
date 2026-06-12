@@ -107,7 +107,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     // "To …" side is kept and imported; a user-defined rule in each app turns it
     // into a transfer that creates the counterpart (the apps' auto-matching is
     // too unreliable to import both raw sides).
-    removeMatchedIncomingTransfers(fetchedData);
+    const droppedTransferSums = removeMatchedIncomingTransfers(fetchedData);
 
     // Phase 2: import (tab already closed). A user-defined rule (required setup,
     // see README) creates the matching inflow whenever a "To …" transfer is
@@ -151,8 +151,8 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
                 console.log(`SoFi ${account.id}: no new transactions.`);
             }
             if (balance != null) {
-                logBalanceDrift(`SoFi ${account.id}`, options.appBalances?.[mappingKey], addedByKey[mappingKey], balance);
-                await applyActualStartingBalance(`SoFi ${account.id}`, settings, mapped, { bankBalance: balance, appBalances: options.appBalances?.[mappingKey], byApp: addedByKey[mappingKey], isFirstSync: !lastSyncDates[mappingKey], startDate, importedId: `sofi-${account.id}-starting-balance` });
+                await logBalanceDrift(`SoFi ${account.id}`, mappingKey, options.appBalances?.[mappingKey], addedByKey[mappingKey], balance, droppedTransferSums[mappingKey] || 0);
+                await applyActualStartingBalance(`SoFi ${account.id}`, settings, mapped, { mappingKey, extraSum: droppedTransferSums[mappingKey] || 0, bankBalance: balance, appBalances: options.appBalances?.[mappingKey], byApp: addedByKey[mappingKey], isFirstSync: !lastSyncDates[mappingKey], startDate, importedId: `sofi-${account.id}-starting-balance` });
             }
             await updateLastSyncStats(mappingKey, transactions);
             await updateLastSyncDate(mappingKey, today);
@@ -195,8 +195,8 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
                 console.log("SoFi credit: no new transactions.");
             }
             if (currentBalance != null) {
-                logBalanceDrift("SoFi Credit", options.appBalances?.[creditKey], result.byApp, -currentBalance);
-                await applyActualStartingBalance("SoFi Credit", settings, creditActualId, { bankBalance: -currentBalance, appBalances: options.appBalances?.[creditKey], byApp: result.byApp, isFirstSync: !lastSyncDates[creditKey], startDate, importedId: "sofi-credit-starting-balance" });
+                await logBalanceDrift("SoFi Credit", creditKey, options.appBalances?.[creditKey], result.byApp, -currentBalance);
+                await applyActualStartingBalance("SoFi Credit", settings, creditActualId, { mappingKey: creditKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[creditKey], byApp: result.byApp, isFirstSync: !lastSyncDates[creditKey], startDate, importedId: "sofi-credit-starting-balance" });
             }
             await updateLastSyncStats(creditKey, transactions);
             await updateLastSyncDate(creditKey, today);
@@ -373,6 +373,9 @@ function accumulateAdded(addedByKey, key, byApp = {}) {
 // Matches are consumed so multiple same-day/same-amount transfers pair 1:1, and
 // a "From …" with no matching "To …" (e.g. the other account isn't synced) is
 // kept as a real inflow.
+// Returns the per-account sum of the dropped rows: that money is in the bank
+// balance but reaches the app via the rule-created transfer instead of an
+// import, so the balance math must count it as already accounted for.
 function removeMatchedIncomingTransfers(fetchedData) {
     const toByKey = new Map(); // `${date}|${amount}` -> [mappingKey, ...]
     for (const { mappingKey, transactions } of fetchedData) {
@@ -385,6 +388,7 @@ function removeMatchedIncomingTransfers(fetchedData) {
         }
     }
 
+    const droppedByKey = {};
     for (const data of fetchedData) {
         let removed = 0;
         data.transactions = data.transactions.filter(tx => {
@@ -393,11 +397,13 @@ function removeMatchedIncomingTransfers(fetchedData) {
             const idx = candidates ? candidates.findIndex(k => k !== data.mappingKey) : -1;
             if (idx < 0) return true; // no matching "To" in another account → real inflow, keep
             candidates.splice(idx, 1); // consume so each "To" pairs with one "From"
+            droppedByKey[data.mappingKey] = (droppedByKey[data.mappingKey] || 0) + tx.amount;
             removed++;
             return false;
         });
         if (removed) console.log(`SoFi ${data.account.id}: dropped ${removed} incoming transfer(s) matched to a "To" in another account.`);
     }
+    return droppedByKey;
 }
 
 function extractSoFiAccounts(apolloState) {

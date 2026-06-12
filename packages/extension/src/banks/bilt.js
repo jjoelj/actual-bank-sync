@@ -78,8 +78,8 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
         console.log("Bilt: no new transactions.");
     }
     if (currentBalance != null) {
-        logBalanceDrift("Bilt", options.appBalances?.[accountKey], result.byApp, -currentBalance);
-        await applyActualStartingBalance("Bilt", settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "bilt-starting-balance" });
+        await logBalanceDrift("Bilt", accountKey, options.appBalances?.[accountKey], result.byApp, -currentBalance);
+        await applyActualStartingBalance("Bilt", settings, mapped, { mappingKey: accountKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "bilt-starting-balance" });
     }
     await updateLastSyncStats(accountKey, transactions);
     await updateLastSyncDate(accountKey, today);

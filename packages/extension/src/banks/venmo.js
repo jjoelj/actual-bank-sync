@@ -69,10 +69,10 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
                 console.log("Venmo: no new transactions.");
             }
             if (endingBalance != null) {
-                logBalanceDrift("Venmo", options.appBalances?.["venmo-cash"], result.byApp, endingBalance);
+                await logBalanceDrift("Venmo", "venmo-cash", options.appBalances?.["venmo-cash"], result.byApp, endingBalance);
                 // The wallet balance only covers wallet transactions, so the
                 // starting-balance math uses their sum, not the full import's.
-                await applyActualStartingBalance("Venmo", settings, cashAccountId, { bankBalance: endingBalance, appBalances: options.appBalances?.["venmo-cash"], byApp: result.byApp, isFirstSync, startDate: cashStart, importedId: "venmo-cash-starting-balance", addedSumOverride: walletTransactions.reduce((s, tx) => s + tx.amount, 0) });
+                await applyActualStartingBalance("Venmo", settings, cashAccountId, { mappingKey: "venmo-cash", bankBalance: endingBalance, appBalances: options.appBalances?.["venmo-cash"], byApp: result.byApp, isFirstSync, startDate: cashStart, importedId: "venmo-cash-starting-balance", addedSumOverride: walletTransactions.reduce((s, tx) => s + tx.amount, 0) });
             }
             await updateLastSyncStats("venmo-cash", transactions);
             // Only advance the watermark and clear the error on a real result, so
@@ -110,8 +110,8 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
                 console.log("Venmo Credit: no new transactions.");
             }
             if (bankBalance != null) {
-                logBalanceDrift("Venmo Credit", options.appBalances?.["venmo-credit"], result.byApp, bankBalance);
-                await applyActualStartingBalance("Venmo Credit", settings, creditAccountId, { bankBalance, appBalances: options.appBalances?.["venmo-credit"], byApp: result.byApp, isFirstSync: !lastSyncDates["venmo-credit"], startDate: creditStart, importedId: "venmo-credit-starting-balance" });
+                await logBalanceDrift("Venmo Credit", "venmo-credit", options.appBalances?.["venmo-credit"], result.byApp, bankBalance);
+                await applyActualStartingBalance("Venmo Credit", settings, creditAccountId, { mappingKey: "venmo-credit", bankBalance, appBalances: options.appBalances?.["venmo-credit"], byApp: result.byApp, isFirstSync: !lastSyncDates["venmo-credit"], startDate: creditStart, importedId: "venmo-credit-starting-balance" });
             }
             await updateLastSyncStats("venmo-credit", transactions);
 

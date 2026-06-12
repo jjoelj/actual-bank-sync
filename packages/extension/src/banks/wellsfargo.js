@@ -87,8 +87,8 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
             console.log("WF: no new transactions.");
         }
         if (wfBalance != null) {
-            logBalanceDrift("WF", options.appBalances?.[accountKey], result.byApp, -wfBalance);
-            await applyActualStartingBalance("WF", settings, mapped, { bankBalance: -wfBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "wf-starting-balance" });
+            await logBalanceDrift("WF", accountKey, options.appBalances?.[accountKey], result.byApp, -wfBalance);
+            await applyActualStartingBalance("WF", settings, mapped, { mappingKey: accountKey, bankBalance: -wfBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "wf-starting-balance" });
         }
         await updateLastSyncStats(accountKey, transactions);
 

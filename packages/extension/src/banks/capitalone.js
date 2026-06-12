@@ -58,8 +58,8 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
             } else {
                 console.log(`Capital One ${account.name}: no new transactions.`);
             }
-            logBalanceDrift(`Capital One ${account.name}`, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
-            await applyActualStartingBalance(`Capital One ${account.name}`, settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `capitalone-${account.id}-starting-balance` });
+            await logBalanceDrift(`Capital One ${account.name}`, mappingKey, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
+            await applyActualStartingBalance(`Capital One ${account.name}`, settings, mapped, { mappingKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `capitalone-${account.id}-starting-balance` });
             await updateLastSyncStats(mappingKey, transactions);
             await updateLastSyncDate(mappingKey, today);
 

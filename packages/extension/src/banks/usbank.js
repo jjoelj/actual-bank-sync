@@ -90,8 +90,8 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
             } else {
                 console.log(`US Bank ${account.name}: no new transactions.`);
             }
-            logBalanceDrift(`US Bank ${account.name}`, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
-            await applyActualStartingBalance(`US Bank ${account.name}`, settings, mapped, { bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance` });
+            await logBalanceDrift(`US Bank ${account.name}`, mappingKey, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
+            await applyActualStartingBalance(`US Bank ${account.name}`, settings, mapped, { mappingKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance` });
             await updateLastSyncStats(mappingKey, transactions);
             await updateLastSyncDate(mappingKey, today);
 

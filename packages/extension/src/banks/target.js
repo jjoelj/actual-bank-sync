@@ -76,8 +76,8 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
             console.log("Target: no new transactions.");
         }
         if (balance != null) {
-            logBalanceDrift("Target", options.appBalances?.[accountKey], result.byApp, -balance);
-            await applyActualStartingBalance("Target", settings, mapped, { bankBalance: -balance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "target-starting-balance" });
+            await logBalanceDrift("Target", accountKey, options.appBalances?.[accountKey], result.byApp, -balance);
+            await applyActualStartingBalance("Target", settings, mapped, { mappingKey: accountKey, bankBalance: -balance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "target-starting-balance" });
         }
         await updateLastSyncStats(accountKey, transactions);
 

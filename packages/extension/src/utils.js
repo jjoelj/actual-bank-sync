@@ -35,17 +35,30 @@ export async function migrateAccountMappings() {
     if (changed) await chrome.storage.local.set({ accountMappings });
 }
 
+// Held-back transactions (unmapped categories) are in the bank's balance but
+// not yet in either app, so balance math must count them as "already accounted
+// for" — otherwise the starting balance / drift absorbs them and goes wrong by
+// their sum once they flush.
+async function heldBackSum(mappingKey) {
+    if (!mappingKey) return 0;
+    const { pendingCategoryTxns = {} } = await chrome.storage.local.get("pendingCategoryTxns");
+    return (pendingCategoryTxns[mappingKey] || []).reduce((s, tx) => s + (Number(tx.amount) || 0), 0);
+}
+
 // Logs, per configured app, the opening balance the app would need for its
 // balance to line up with the bank: appBalances = { sure?, actual? } (cents,
-// liability-negative), byApp = importTransactions result per app.
-export function logBalanceDrift(label, appBalances, byApp, bankBalance) {
-    for (const app of ["sure", "actual"]) {
+// liability-negative), byApp = importTransactions result per app. extraSum is
+// money the bank balance includes that arrives in the app some other way —
+// e.g. SoFi incoming transfers dropped in favor of the rule-created side.
+export async function logBalanceDrift(label, mappingKey, appBalances, byApp, bankBalance, extraSum = 0) {
+    const pendingSum = await heldBackSum(mappingKey);
+    for (const app of APPS) {
         const appBalance = appBalances?.[app];
         if (appBalance == null) continue;
         const addedSum = byApp?.[app]?.addedSum ?? 0;
-        const expected = appBalance + addedSum;
+        const expected = appBalance + addedSum + pendingSum + extraSum;
         const opening = bankBalance - expected;
-        console.log(`${label} [${app}]: app ${appBalance} + added ${addedSum} = ${expected}, bank ${bankBalance}, opening balance needed: ${opening} ($${(opening / 100).toFixed(2)})`);
+        console.log(`${label} [${app}]: app ${appBalance} + added ${addedSum}${pendingSum ? ` + held ${pendingSum}` : ""}${extraSum ? ` + transfers ${extraSum}` : ""} = ${expected}, bank ${bankBalance}, opening balance needed: ${opening} ($${(opening / 100).toFixed(2)})`);
     }
 }
 
@@ -55,7 +68,7 @@ export function logBalanceDrift(label, appBalances, byApp, bankBalance) {
 // Idempotent via imported_id. addedSumOverride lets banks whose balance covers
 // only a subset of imported transactions (e.g. Venmo wallet) supply their own
 // sum instead of the import result's.
-export async function applyActualStartingBalance(label, settings, mapping, { bankBalance, appBalances, byApp, isFirstSync, startDate, importedId, addedSumOverride }) {
+export async function applyActualStartingBalance(label, settings, mapping, { mappingKey, bankBalance, appBalances, byApp, isFirstSync, startDate, importedId, addedSumOverride, extraSum = 0 }) {
     const target = appTargets(mapping);
     if (!target.actual || !isFirstSync || bankBalance == null || !startDate) return;
     const actualBalance = appBalances?.actual;
@@ -64,7 +77,8 @@ export async function applyActualStartingBalance(label, settings, mapping, { ban
         return;
     }
     const addedSum = addedSumOverride ?? byApp?.actual?.addedSum ?? 0;
-    const startingBalance = bankBalance - (actualBalance + addedSum);
+    const pendingSum = await heldBackSum(mappingKey);
+    const startingBalance = bankBalance - (actualBalance + addedSum + pendingSum + extraSum);
     if (startingBalance === 0) return;
     const dayBefore = subtractOneDay(startDate);
     await importToActual(`${label} Starting Balance`, settings, target.actual, [{
