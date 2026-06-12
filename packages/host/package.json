@@ -9,6 +9,6 @@
     "install-host": "node src/install.js"
   },
   "dependencies": {
-    "@actual-app/api": "^26.4.0"
+    "@actual-app/api": "^26.6.0"
   }
 }

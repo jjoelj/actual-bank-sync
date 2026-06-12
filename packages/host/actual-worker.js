@@ -58,9 +58,16 @@ try {
     if (command === "testConnection") {
         result = {ok: true};
     } else {
-        await actual.downloadBudget(settings.actualSyncId, {
-            password: settings.actualFilePassword,
-        });
+        try {
+            await actual.downloadBudget(settings.actualSyncId, {
+                password: settings.actualFilePassword,
+            });
+        } catch (err) {
+            // loot-core's API build throws message-less Errors for key-test
+            // failures (its i18n t() returns nothing), so name the likely cause.
+            if (!err?.message) throw new Error("Could not open budget — the File Password does not decrypt this budget file (or the key-test failed). Check the File Password in settings.");
+            throw err;
+        }
 
         if (command === "getAccounts") {
             const accounts = await actual.getAccounts();
@@ -131,5 +138,21 @@ try {
     await actual.shutdown();
     process.stdout.write(JSON.stringify({ result }));
 } catch (err) {
-    process.stdout.write(JSON.stringify({ error: err.message || JSON.stringify(err) }));
+    process.stdout.write(JSON.stringify({ error: errorText(err) }));
+}
+
+// loot-core throws a mix of Errors, Error subclasses with extra fields
+// (reason/meta), and plain objects — produce something readable for all of them.
+function errorText(err) {
+    if (typeof err === "string") return err;
+    const parts = [];
+    if (err?.message) parts.push(err.message);
+    if (err?.reason) parts.push(`reason: ${err.reason}`);
+    if (err?.type) parts.push(`type: ${err.type}`);
+    if (parts.length) return parts.join(" — ");
+    try {
+        const json = JSON.stringify({ ...err });
+        if (json && json !== "{}") return json;
+    } catch {}
+    return err?.stack?.split("\n")[0] || String(err);
 }
