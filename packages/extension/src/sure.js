@@ -170,49 +170,129 @@ export async function getTransactionCount(accountId) {
   return data.pagination?.total_count ?? data.transactions?.length ?? 0;
 }
 
-export async function deleteAllTransactions(accountId) {
+// Delete an account's transactions. With { startDate } only rows dated on or
+// after startDate are removed (reconcile's date-bounded reset); without it,
+// every transaction is deleted.
+export async function deleteAllTransactions(accountId, { startDate } = {}) {
   const { apiKey, baseUrl } = await getSettings();
   let deleted = 0;
   const MAX_PASSES = 100; // safety bound; each pass strictly reduces what remains
 
   for (let pass = 0; pass < MAX_PASSES; pass++) {
-    const transactions = await getTransactions(accountId);
+    const fetched = await getTransactions(accountId, startDate ? { startDate } : {});
+    // Date-bounded reset (reconcile) skips transfers: deleting a transfer leg
+    // makes Sure remove its paired entry on the other account, which an
+    // account-scoped reset must not touch. A full wipe still deletes everything.
+    const transactions = startDate ? fetched.filter(tx => !isTransfer(tx)) : fetched;
     if (transactions.length === 0) return deleted;
 
+    let progressed = false;
     for (const tx of transactions) {
       const res = await fetch(`${baseUrl}/transactions/${tx.id}`, {
         method: "DELETE",
         headers: { "X-Api-Key": apiKey },
       });
-      if (res.ok) { deleted++; continue; }
+      if (res.ok) { deleted++; progressed = true; continue; }
 
       const body = await res.json().catch(() => ({}));
       const msg = body.message || body.error || `Delete failed: ${res.status}`;
       // A row from our snapshot can already be gone — e.g. Sure auto-removes a
       // transfer's paired entry when its counterpart is deleted. Skip it and let
       // the next pass re-fetch a fresh list, restarting the delete rather than
-      // aborting the whole operation. Any other error is real and propagates.
+      // aborting the whole operation.
       if (res.status === 404 || /not found/i.test(msg)) continue;
+      // A split child can't be deleted on its own; deleting its parent cascades
+      // and removes it. Skip it here — once the parent is deleted (in this pass
+      // or a later one) the child disappears from the next fetch.
+      if (/split child/i.test(msg)) continue;
+      // Any other error is real and propagates.
       throw new Error(msg);
+    }
+
+    // The list is non-empty but nothing could be deleted this pass — every
+    // remaining row is a split child with no deletable parent, or hits an error
+    // we keep skipping. Bail out clearly instead of spinning to MAX_PASSES.
+    if (!progressed) {
+      throw new Error(`Delete stalled with ${transactions.length} transaction(s) left that could not be removed (likely orphaned split children).`);
     }
   }
   throw new Error(`Delete did not finish after ${MAX_PASSES} passes — transactions keep reporting "not found".`);
 }
 
 
+const PER_PAGE = 100;
+
+// Sure's offset pagination is lossy: when a result set spans more than one page,
+// its LIMIT/OFFSET ordering isn't stable across the boundary, so exactly one row
+// per multi-page window silently never appears on any page (confirmed: 610/611).
+// Re-paging can't recover it. The only reliable fix is to never cross a page
+// boundary — fetch the range, and whenever a window holds more than one page,
+// split it in half by date and recurse, so every kept response is a single
+// complete page. Used by the paths where completeness matters (reconcile, import
+// dedup, delete); getLatestTransactionDate uses the cheaper paged path below.
 export async function getTransactions(accountId, { startDate, endDate } = {}) {
-  const all = [];
-  let page = 1;
-  while (true) {
-    let url = `/transactions?account_id=${accountId}&page=${page}&per_page=100`;
-    if (startDate) url += `&start_date=${startDate}`;
-    if (endDate) url += `&end_date=${endDate}`;
-    const data = await apiFetch(url);
-    all.push(...data.transactions);
-    if (page >= data.pagination.total_pages) break;
-    page++;
+  const byId = new Map();
+  await fetchRange(accountId, startDate || "1970-01-01", endDate || isoToday(), byId);
+  return [...byId.values()];
+}
+
+async function fetchRange(accountId, startDate, endDate, byId) {
+  const data = await fetchTxPage(accountId, startDate, endDate, 1);
+  for (const tx of data.transactions) byId.set(tx.id, tx);
+  // If the count is missing, a full page means there's probably more — force a
+  // split rather than assume this single page is the whole window.
+  const total = data.pagination.total_count
+    ?? (data.transactions.length >= PER_PAGE ? Infinity : data.transactions.length);
+  if (total <= PER_PAGE) return; // whole window fits in this one page — done
+
+  if (startDate === endDate) {
+    // A single day with more than one page of rows can't be split by date; page
+    // through it (best effort) and accept the API's drop if it occurs.
+    for (let page = 2; page <= data.pagination.total_pages; page++) {
+      const more = await fetchTxPage(accountId, startDate, endDate, page);
+      for (const tx of more.transactions) byId.set(tx.id, tx);
+    }
+    console.warn(`getTransactions(${accountId}): ${total} rows on a single day (${startDate}); pagination may drop one.`);
+    return;
   }
-  return all;
+
+  // Split the date range so no kept window spans a page boundary.
+  let mid = midpointDate(startDate, endDate);
+  if (mid === null) mid = startDate; // adjacent days: peel the first off
+  await fetchRange(accountId, startDate, mid, byId);
+  await fetchRange(accountId, nextDay(mid), endDate, byId);
+}
+
+function fetchTxPage(accountId, startDate, endDate, page) {
+  let url = `/transactions?account_id=${accountId}&page=${page}&per_page=${PER_PAGE}`;
+  if (startDate) url += `&start_date=${startDate}`;
+  if (endDate) url += `&end_date=${endDate}`;
+  return apiFetch(url);
+}
+
+function isoToday() { return new Date().toISOString().slice(0, 10); }
+function dayMs(d) { const [y, m, dd] = d.split("-").map(Number); return Date.UTC(y, m - 1, dd); }
+function isoFromMs(ms) { return new Date(ms).toISOString().slice(0, 10); }
+function nextDay(d) { return isoFromMs(dayMs(d) + 86400000); }
+function midpointDate(start, end) {
+  const days = Math.round((dayMs(end) - dayMs(start)) / 86400000);
+  if (days < 2) return null; // 0 or 1 day apart: nothing strictly interior
+  return isoFromMs(dayMs(start) + Math.floor(days / 2) * 86400000);
+}
+
+// Cheap full-history fetch for callers that don't need every row — plain offset
+// paging with id-dedupe. Inherits Sure's one-row-per-window drop, which is
+// harmless for a max-date lookup but unsafe for completeness checks.
+async function fetchAllPagesLossy(accountId, { startDate, endDate } = {}) {
+  const byId = new Map();
+  let page = 1, totalPages = 1;
+  do {
+    const data = await fetchTxPage(accountId, startDate, endDate, page);
+    for (const tx of data.transactions) byId.set(tx.id, tx);
+    totalPages = data.pagination.total_pages;
+    page++;
+  } while (page <= totalPages);
+  return [...byId.values()];
 }
 
 // A transaction is part of a transfer when Sure links it via `transfer`, or
@@ -224,7 +304,7 @@ function isTransfer(tx) {
 }
 
 export async function getLatestTransactionDate(accountId) {
-  const txs = await getTransactions(accountId);
+  const txs = await fetchAllPagesLossy(accountId);
   let maxDate = null;
   for (const tx of txs) {
     if (isTransfer(tx)) continue;

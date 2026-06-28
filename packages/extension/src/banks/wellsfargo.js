@@ -55,21 +55,33 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
         const detailIds = base.filter(t => t.showAdditionalData).map(t => t.id);
         let categories = {};
         if (additionalDetailsUrl && detailIds.length) {
-            reportProgress(options, 70, `Fetching ${detailIds.length} categories`);
-            const res = await chrome.tabs.sendMessage(tab.id, {
-                type: "FETCH_WF_CATEGORIES",
-                additionalDetailsUrl,
-                transactionIds: detailIds,
-            }).catch(() => null);
-            categories = res?.categories || {};
+            const BATCH = 10;
+            for (let i = 0; i < detailIds.length; i += BATCH) {
+                const batch = detailIds.slice(i, i + BATCH);
+                const done = Math.min(i + BATCH, detailIds.length);
+                console.log(`WF: fetching categories ${i + 1}–${done} of ${detailIds.length}`);
+                reportProgress(options, 70 + Math.round((done / detailIds.length) * 10),
+                    `Fetching categories (${done}/${detailIds.length})`);
+                const res = await chrome.tabs.sendMessage(tab.id, {
+                    type: "FETCH_WF_CATEGORIES",
+                    additionalDetailsUrl,
+                    transactionIds: batch,
+                }).catch(() => null);
+                Object.assign(categories, res?.categories || {});
+            }
         }
 
+        // Key dedup off referenceNumber: WF's `id` is a per-session UUID that
+        // changes between syncs, so `wf-${id}` re-imports the same transaction
+        // every time. referenceNumber is the stable bank reference (unique and
+        // present on every row, and shared across an auth→post transition).
+        // `id` is still used in-session for the category detail lookup above.
         transactions = base.map(t => ({
             date: t.date,
             amount: t.amount,
             payee_name: t.payee_name,
             category: categories[t.id] || undefined,
-            imported_id: t.id != null ? `wf-${t.id}` : undefined,
+            imported_id: t.referenceNumber ? `wf-${t.referenceNumber}` : (t.id != null ? `wf-${t.id}` : undefined),
         }));
     } finally {
         chrome.tabs.remove(tab.id);
@@ -91,13 +103,13 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
             await applyActualStartingBalance("WF", settings, mapped, { mappingKey: accountKey, bankBalance: -wfBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "wf-starting-balance" });
         }
         await updateLastSyncStats(accountKey, transactions);
+        if (result.failures?.length) throw new Error(result.failures.join("; "));
+        await updateLastSyncDate(accountKey, today);
 
         reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
     } catch (err) {
         console.error("WF import failed:", err.message);
     }
-
-    await updateLastSyncDate(accountKey, today);
 }
 
 const WF_STATE_LABELS = {
@@ -134,6 +146,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
         let wfState = "click-card";
         let wfBalance = null;
         let interceptorReady = false;
+        let lastClickTime = 0;
 
         const interval = setInterval(async () => {
             const elapsed = Date.now() - start;
@@ -161,29 +174,33 @@ function pollForWFData(tabId, wfAccountId, onTick) {
 
                 if (tab.status !== "complete") return;
 
-                if (wfState === "click-card" && tab.url?.includes("accountsummary")) {
-                    const result = await chrome.scripting.executeScript({
-                        target: { tabId },
-                        world: "MAIN",
-                        args: [wfAccountId],
-                        func: (accountId) => {
-                            const summary = window._wfPayload?.applicationData?.accountSummary;
-                            if (!summary) return null;
-                            const account = summary.accounts?.find(a => a.accountId === accountId && a.type === "credit")
-                                ?? summary.accounts?.find(a => a.type === "credit");
-                            if (!account) return null;
-                            const productName = account.accountProfile?.accountProductName;
-                            const btn = document.querySelector(`[data-testid="${productName}-title"]`)?.closest("button");
-                            if (!btn) return null;
-                            btn.click();
-                            const outstanding = account.balance?.find(b => b.type === "OUTSTANDING");
-                            return { balance: outstanding != null ? Math.round(outstanding.amount * 100) : null };
-                        },
-                    });
-                    const payload = result?.[0]?.result;
-                    if (payload) {
-                        wfBalance = payload.balance;
+                if (wfState === "click-card") {
+                    if (tab.url?.includes("accountdetails")) {
                         wfState = "load-transactions";
+                    } else if (tab.url?.includes("accountsummary") && Date.now() - lastClickTime > 5000) {
+                        lastClickTime = Date.now();
+                        const result = await chrome.scripting.executeScript({
+                            target: { tabId },
+                            world: "MAIN",
+                            args: [wfAccountId],
+                            func: (accountId) => {
+                                const summary = window._wfPayload?.applicationData?.accountSummary;
+                                if (!summary) return null;
+                                const account = summary.accounts?.find(a => a.accountId === accountId && a.type === "credit")
+                                    ?? summary.accounts?.find(a => a.type === "credit");
+                                if (!account) return null;
+                                const productName = account.accountProfile?.accountProductName;
+                                const btn = document.querySelector(`[data-testid="${productName}-title"]`)?.closest("button");
+                                if (!btn) return null;
+                                btn.click();
+                                const outstanding = account.balance?.find(b => b.type === "OUTSTANDING");
+                                return { balance: outstanding != null ? Math.round(outstanding.amount * 100) : null };
+                            },
+                        });
+                        const payload = result?.[0]?.result;
+                        if (payload) {
+                            wfBalance = payload.balance;
+                        }
                     }
 
                 } else if (wfState === "load-transactions" && tab.url?.includes("accountdetails")) {
@@ -303,8 +320,11 @@ function mapWFTransactions(listResponse, startDate, endDate) {
     const seen = new Set();
     const transactions = [];
     for (const tx of rows) {
-        if (seen.has(tx.id)) continue;
-        seen.add(tx.id);
+        // Dedup within the response on referenceNumber (the stable key) so an
+        // auth + posted pair sharing one reference collapses to a single row.
+        const dedupKey = tx.referenceNumber ?? tx.id;
+        if (seen.has(dedupKey)) continue;
+        seen.add(dedupKey);
 
         const date = toLocalDate(tx.postDate);
         if (!date || date < startDate || date > endDate) continue;
@@ -315,6 +335,7 @@ function mapWFTransactions(listResponse, startDate, endDate) {
         const sign = String(tx.debitCreditType).toUpperCase() === "CREDIT" ? 1 : -1;
         transactions.push({
             id: tx.id,
+            referenceNumber: tx.referenceNumber,
             showAdditionalData: tx.showAdditionalData,
             date,
             amount: Math.round(raw * 100) * sign,

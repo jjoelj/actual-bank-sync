@@ -70,10 +70,11 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
         console.warn("Fidelity: failed to fetch balance:", err.message);
     }
 
+    const transactions = mapFidelityTransactions(rawTransactions);
+    const isFirstSync = !lastSyncDates[accountKey];
+    let result = {};
+
     try {
-        const transactions = mapFidelityTransactions(rawTransactions);
-        const isFirstSync = !lastSyncDates[accountKey];
-        let result = {};
         if (transactions.length > 0) {
             reportProgress(options, 80, `Importing ${transactions.length} transactions`);
             console.log(`Fidelity: importing ${transactions.length} transactions.`);
@@ -82,18 +83,19 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
         } else {
             console.log("Fidelity: no new transactions.");
         }
+        await updateLastSyncStats(accountKey, transactions);
+        if (result.failures?.length) throw new Error(result.failures.join("; "));
         if (currentBalance != null) {
             await logBalanceDrift("Fidelity", accountKey, options.appBalances?.[accountKey], result.byApp, -currentBalance);
             await applyActualStartingBalance("Fidelity", settings, mapped, { mappingKey: accountKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "fidelity-starting-balance" });
         }
-        await updateLastSyncStats(accountKey, transactions);
 
-        reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
+            await updateLastSyncDate(accountKey, today);
     } catch (err) {
         console.error("Fidelity import failed:", err.message);
     }
 
-    await updateLastSyncDate(accountKey, today);
+    reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
 }
 
 async function fetchFidelityBalance(accessToken, accountToken) {

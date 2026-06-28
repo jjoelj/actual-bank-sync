@@ -30,7 +30,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
         return;
     }
 
-    const tab = await openTabBackground("https://venmo.com");
+    const tab = await openTabBackground("https://id.venmo.com/signin");
     if (needsCash) reportProgress(options, "venmo-cash", 15, "Opening Venmo…");
     if (needsCredit) reportProgress(options, "venmo-credit", 15, "Opening Venmo…");
     chrome.tabs.update(tab.id, { active: true });
@@ -75,8 +75,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
                 await applyActualStartingBalance("Venmo", settings, cashAccountId, { mappingKey: "venmo-cash", bankBalance: endingBalance, appBalances: options.appBalances?.["venmo-cash"], byApp: result.byApp, isFirstSync, startDate: cashStart, importedId: "venmo-cash-starting-balance", addedSumOverride: walletTransactions.reduce((s, tx) => s + tx.amount, 0) });
             }
             await updateLastSyncStats("venmo-cash", transactions);
-            // Only advance the watermark and clear the error on a real result, so
-            // a deferred/failed fetch is retried next sync rather than skipped.
+            if (result.failures?.length) throw new Error(result.failures.join("; "));
             await updateLastSyncDate("venmo-cash", today);
             await clearSyncError("venmo-cash");
 
@@ -114,12 +113,13 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
                 await applyActualStartingBalance("Venmo Credit", settings, creditAccountId, { mappingKey: "venmo-credit", bankBalance, appBalances: options.appBalances?.["venmo-credit"], byApp: result.byApp, isFirstSync: !lastSyncDates["venmo-credit"], startDate: creditStart, importedId: "venmo-credit-starting-balance" });
             }
             await updateLastSyncStats("venmo-credit", transactions);
+            if (result.failures?.length) throw new Error(result.failures.join("; "));
+            await updateLastSyncDate("venmo-credit", today);
 
             reportProgress(options, "venmo-credit", 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("Venmo Credit failed:", err.message);
         }
-        await updateLastSyncDate("venmo-credit", today);
     }
 }
 

@@ -11,7 +11,10 @@ export const COMMANDS = new Set([
   "createCategory",
   "getLatestTransactionDate",
   "getTransactionCount",
+  "getTransactions",
   "deleteAllTransactions",
+  "deleteTransactionsFrom",
+  "updateTransactionCategory",
 ]);
 
 export async function runCommand(settings, command, args) {
@@ -36,14 +39,20 @@ function runScript(settings, command, args) {
     child.stderr.on("data", (d) => (stderr += d));
 
     child.on("close", (code) => {
-      try {
-        const lastLine = stdout.trim().split("\n").pop();
-        const result = JSON.parse(lastLine);
-        if (result.error) reject(new Error(result.error));
-        else resolve(result.result);
-      } catch {
-        reject(new Error("Worker output parse failed: " + stdout));
+      // The worker tags its JSON result line with this marker; loot-core's own
+      // logging shares stdout, so we find the marked line rather than trust
+      // position. (The worker also routes its console output to stderr.)
+      const marker = "__ACTUAL_WORKER_RESULT__";
+      const line = stdout.split("\n").reverse().find((l) => l.startsWith(marker));
+      if (line) {
+        try {
+          const result = JSON.parse(line.slice(marker.length));
+          if (result.error) reject(new Error(result.error));
+          else resolve(result.result);
+          return;
+        } catch {}
       }
+      reject(new Error("Worker output parse failed (code " + code + "): " + (stderr || stdout)));
     });
 
     child.stdin.write(input);

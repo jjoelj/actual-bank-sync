@@ -11,8 +11,9 @@ import { syncUSBank, getUSBankAccountsForPopup } from "./banks/usbank.js";
 import { syncWellsFargo, getWellsFargoAccountsForPopup } from "./banks/wellsfargo.js";
 import * as sure from "./sure.js";
 import { sendToHost } from "./host.js";
+import { reconcileAll } from "./reconcile.js";
 import { ACCOUNT_TYPES } from "./accounts.js";
-import { pacificDate, flushPendingCategories, appTargets, migrateAccountMappings } from "./utils.js";
+import { pacificDate, flushPendingCategories, appTargets, migrateAccountMappings, offsetDate } from "./utils.js";
 
 const SINGLE_ACCOUNT_SYNC = {
   bilt:     syncBilt,
@@ -75,6 +76,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 let syncInProgress = false;
 let flushQueued = false;
+// Guards against overlapping reconcile runs (e.g. the popup reopened mid-run),
+// which would spawn concurrent Actual workers against the shared dataDir.
+let reconcileInProgress = false;
 
 // Coalescing flush driver. Requests that arrive while a sync or an earlier flush
 // is running don't get dropped — they set flushQueued, and the in-flight run
@@ -367,6 +371,49 @@ async function deleteAllTransactions(app, accountId) {
   return sendToHost("deleteAllTransactions", { settings, accountId });
 }
 
+// ── Reconcile actions ────────────────────────────────────────────────────────
+
+// Resolve a category accepted from the other app onto one app's transaction.
+// categoryName may be null to clear the category (the other side was blank).
+async function acceptReconcileCategory(targetApp, transactionId, categoryName) {
+  const settings = await getStoredSettings();
+  if (targetApp === "actual") {
+    await sendToHost("updateTransactionCategory", { settings, transactionId, categoryName: categoryName || null });
+    return;
+  }
+  let categoryId = null;
+  if (categoryName) {
+    const cats = await sure.getCategories();
+    const found = cats.find((c) => c.name === categoryName) || (await sure.createCategory(categoryName));
+    categoryId = found.id;
+  }
+  await sure.setTransactionCategory(transactionId, categoryId);
+}
+
+// Delete one app's transactions on or after fromDate and roll its watermark back
+// to the day before, so a targeted resync re-pulls the window (and the missing
+// transaction with it). The other app's rows dedup on re-import.
+async function resetAccountFrom(key, app, fromDate) {
+  const settings = await getStoredSettings();
+  const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+  const accountId = appTargets(accountMappings[key])[app];
+  if (!accountId) throw new Error(`No ${app} account mapped for ${key}.`);
+
+  const deleted = app === "sure"
+    ? await sure.deleteAllTransactions(accountId, { startDate: fromDate })
+    : await sendToHost("deleteTransactionsFrom", { settings, accountId, startDate: fromDate });
+
+  const { lastTxDates = {} } = await chrome.storage.local.get("lastTxDates");
+  const prev = lastTxDates[key];
+  const entry = prev && typeof prev === "object" ? { ...prev } : {};
+  entry[app] = offsetDate(fromDate, -1);
+  lastTxDates[key] = entry;
+  await chrome.storage.local.set({ lastTxDates });
+
+  console.log(`Reconcile: reset ${app} for ${key} from ${fromDate} (deleted ${deleted}), watermark → ${entry[app]}.`);
+  return { deleted };
+}
+
 // ── Message handler (from popup) ─────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -475,6 +522,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     getWellsFargoAccountsForPopup()
       .then((accounts) => sendResponse({ accounts }))
       .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "RECONCILE") {
+    if (reconcileInProgress) {
+      sendResponse({ error: "Reconcile already in progress" });
+      return true;
+    }
+    reconcileInProgress = true;
+    (async () => {
+      const settings = await getStoredSettings();
+      if (!sureConfigured(settings) || !actualConfigured(settings)) {
+        throw new Error("Reconcile needs both Sure and Actual configured.");
+      }
+      const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
+      const { syncFromDate } = await chrome.storage.local.get("syncFromDate");
+      // Stream each account to the popup as it finishes so the view fills in
+      // incrementally; the final return still carries the full report.
+      const onAccount = (account) =>
+        chrome.runtime.sendMessage({ type: "RECONCILE_ACCOUNT", account }).catch(() => {});
+      return reconcileAll(settings, accountMappings, { startDate: syncFromDate }, onAccount);
+    })()
+      .then((report) => sendResponse({ report }))
+      .catch((err) => sendResponse({ error: err.message }))
+      .finally(() => { reconcileInProgress = false; });
+    return true;
+  }
+
+  if (msg.type === "RECONCILE_ACCEPT") {
+    acceptReconcileCategory(msg.targetApp, msg.transactionId, msg.categoryName ?? null)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "RECONCILE_RESET_FROM") {
+    if (syncInProgress) {
+      sendResponse({ error: "Sync in progress, try again later" });
+      return true;
+    }
+    syncInProgress = true;
+    resetAccountFrom(msg.key, msg.app, msg.date)
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ error: err.message }))
+      .finally(() => { syncInProgress = false; });
     return true;
   }
 

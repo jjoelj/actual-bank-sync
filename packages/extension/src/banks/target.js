@@ -75,18 +75,20 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
         } else {
             console.log("Target: no new transactions.");
         }
+        await updateLastSyncStats(accountKey, transactions);
+        if (result.failures?.length) throw new Error(result.failures.join("; "));
         if (balance != null) {
             await logBalanceDrift("Target", accountKey, options.appBalances?.[accountKey], result.byApp, -balance);
             await applyActualStartingBalance("Target", settings, mapped, { mappingKey: accountKey, bankBalance: -balance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "target-starting-balance" });
         }
-        await updateLastSyncStats(accountKey, transactions);
 
-        reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
+        await updateLastSyncDate(accountKey, today);
+
     } catch (err) {
         console.error("Target import failed:", err.message);
     }
 
-    await updateLastSyncDate(accountKey, today);
+    reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
 }
 
 function pollForTargetData(tabId, onTick) {

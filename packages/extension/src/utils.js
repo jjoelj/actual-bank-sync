@@ -50,15 +50,25 @@ async function heldBackSum(mappingKey) {
 // liability-negative), byApp = importTransactions result per app. extraSum is
 // money the bank balance includes that arrives in the app some other way —
 // e.g. SoFi incoming transfers dropped in favor of the rule-created side.
+// extraSum may be a flat cents number (the same for every app) or a per-app map
+// { sure, actual } — the per-app form matters when a transfer is already in one
+// app from a previous sync, so its amount must only be added for the app that
+// still needs it (otherwise the present app double-counts and drifts each sync).
+function extraForApp(extraSum, app) {
+    if (extraSum && typeof extraSum === "object") return extraSum[app] || 0;
+    return extraSum || 0;
+}
+
 export async function logBalanceDrift(label, mappingKey, appBalances, byApp, bankBalance, extraSum = 0) {
     const pendingSum = await heldBackSum(mappingKey);
     for (const app of APPS) {
         const appBalance = appBalances?.[app];
         if (appBalance == null) continue;
         const addedSum = byApp?.[app]?.addedSum ?? 0;
-        const expected = appBalance + addedSum + pendingSum + extraSum;
+        const extra = extraForApp(extraSum, app);
+        const expected = appBalance + addedSum + pendingSum + extra;
         const opening = bankBalance - expected;
-        console.log(`${label} [${app}]: app ${appBalance} + added ${addedSum}${pendingSum ? ` + held ${pendingSum}` : ""}${extraSum ? ` + transfers ${extraSum}` : ""} = ${expected}, bank ${bankBalance}, opening balance needed: ${opening} ($${(opening / 100).toFixed(2)})`);
+        console.log(`${label} [${app}]: app ${appBalance} + added ${addedSum}${pendingSum ? ` + held ${pendingSum}` : ""}${extra ? ` + transfers ${extra}` : ""} = ${expected}, bank ${bankBalance}, opening balance needed: ${opening} ($${(opening / 100).toFixed(2)})`);
     }
 }
 
@@ -78,30 +88,36 @@ export async function applyActualStartingBalance(label, settings, mapping, { map
     }
     const addedSum = addedSumOverride ?? byApp?.actual?.addedSum ?? 0;
     const pendingSum = await heldBackSum(mappingKey);
-    const startingBalance = bankBalance - (actualBalance + addedSum + pendingSum + extraSum);
+    const startingBalance = bankBalance - (actualBalance + addedSum + pendingSum + extraForApp(extraSum, "actual"));
     if (startingBalance === 0) return;
     const dayBefore = subtractOneDay(startDate);
     await importToActual(`${label} Starting Balance`, settings, target.actual, [{
         date: dayBefore,
         amount: startingBalance,
         payee_name: "Starting Balance",
+        category: "Starting Balances",
         imported_id: importedId,
     }]);
     console.log(`${label}: imported Actual starting balance ${startingBalance} on ${dayBefore}`);
 }
 
+// Must produce the same key as txFingerprint for the same transaction: the
+// dedup and category-application paths key Sure's existing rows with this and
+// look them up with txFingerprint. Lowercase the name and use the same
+// "Unknown" default — bank descriptions are often uppercase (e.g. WF), so
+// without this the keys never match and categories silently fail to apply.
 function sureToFingerprint(tx) {
-    return `${tx.date}|${tx.signed_amount_cents}|${tx.name || ""}`;
+    return `${tx.date}|${tx.signed_amount_cents}|${(tx.name || "Unknown").toLowerCase()}`;
 }
 
 function txFingerprint(tx) {
-    return `${tx.date}|${tx.amount}|${tx.payee_name || "Unknown"}`;
+    return `${tx.date}|${tx.amount}|${(tx.payee_name || "Unknown").toLowerCase()}`;
 }
 
 // Category held-back queue fingerprint (includes raw category so two rows that
 // differ only by category aren't collapsed).
 function pendingFingerprint(tx) {
-    return `${tx.date}|${tx.amount}|${tx.payee_name || "Unknown"}|${tx.category || ""}`;
+    return `${tx.date}|${tx.amount}|${(tx.payee_name || "Unknown").toLowerCase()}|${tx.category || ""}`;
 }
 
 // Split fetched transactions into ones we can import now and ones we hold back
@@ -263,8 +279,37 @@ async function applyCategories(label, accountId, importedTxs, minDate, maxDate, 
 async function importToActual(label, settings, accountId, transactions, onProgress) {
     if (transactions.length === 0) return { added: 0, addedSum: 0 };
 
+    let minDate = transactions[0].date, maxDate = transactions[0].date;
+    for (const tx of transactions) {
+        if (tx.date < minDate) minDate = tx.date;
+        if (tx.date > maxDate) maxDate = tx.date;
+    }
+
+    const existing = await sendToHost("getTransactions", { settings, accountId, startDate: minDate, endDate: maxDate });
+    console.log(`${label}: ${existing.length} existing transactions in Actual (${minDate} → ${maxDate})`);
+    const knownCounts = new Map();
+    for (const tx of existing) {
+        const fp = `${tx.date}|${tx.amount}|${(tx.imported_payee || "Unknown").toLowerCase()}`;
+        knownCounts.set(fp, (knownCounts.get(fp) || 0) + 1);
+    }
+    const newTxs = [];
+    for (const tx of transactions) {
+        const fp = txFingerprint(tx);
+        const remaining = knownCounts.get(fp) || 0;
+        if (remaining > 0) {
+            knownCounts.set(fp, remaining - 1);
+        } else {
+            newTxs.push(tx);
+        }
+    }
+
+    if (newTxs.length === 0) {
+        console.log(`${label}: all ${transactions.length} transactions already in Actual, skipping.`);
+        return { added: 0, addedSum: 0 };
+    }
+
     const idCounts = new Map();
-    const deduped = transactions.map(tx => {
+    const deduped = newTxs.map(tx => {
         if (!tx.imported_id) return tx;
         const n = (idCounts.get(tx.imported_id) || 0) + 1;
         idCounts.set(tx.imported_id, n);
@@ -278,33 +323,43 @@ async function importToActual(label, settings, accountId, transactions, onProgre
     const result = await sendToHost("importTransactions", { settings, accountId, transactions: deduped });
     const added = result?.added?.length ?? 0;
     const updated = result?.updated?.length ?? 0;
-    console.log(`${label}: sent ${deduped.length} to Actual, added ${added}, updated ${updated}, skipped ${deduped.length - added - updated}`);
+    const fpMatched = transactions.length - newTxs.length;
+    console.log(`${label}: sent ${deduped.length} to Actual, added ${added}, updated ${updated}, skipped ${deduped.length - added - updated}, fingerprint-matched ${fpMatched}`);
     return { added, addedSum: result?.addedSum ?? 0 };
 }
 
 // Import transactions whose categories are already finalized (budget category
 // names or blank) into every app the mapping targets.
 async function importResolved(label, settings, target, transactions, onProgress) {
+    // One app failing must not block the other: byApp only gets entries for
+    // apps that imported successfully, failures are reported alongside so the
+    // caller can keep the account retryable (don't mark it synced).
     const byApp = {};
+    const failures = [];
     if (transactions.length > 0) {
         const apps = [target.sure && "sure", target.actual && "actual"].filter(Boolean);
         for (let i = 0; i < apps.length; i++) {
             const app = apps[i];
             const base = i / apps.length, span = 1 / apps.length;
             const sub = onProgress && ((f, m) => onProgress(base + f * span, m));
-            byApp[app] = app === "sure"
-                ? await importToSure(`${label} [sure]`, target.sure, transactions, sub)
-                : await importToActual(`${label} [actual]`, settings, target.actual, transactions, sub);
+            try {
+                byApp[app] = app === "sure"
+                    ? await importToSure(`${label} [sure]`, target.sure, transactions, sub)
+                    : await importToActual(`${label} [actual]`, settings, target.actual, transactions, sub);
+            } catch (err) {
+                console.error(`${label}: ${app} import failed:`, err.message);
+                failures.push(`${app}: ${err.message}`);
+            }
         }
     }
     const added = Math.max(0, ...Object.values(byApp).map(r => r.added));
-    return { added, byApp };
+    return { added, byApp, failures };
 }
 
 export async function importTransactions(label, settings, mapping, transactions, mappingKey, onProgress) {
     const target = appTargets(mapping);
-    if (!target.sure && !target.actual) return { added: 0, byApp: {} };
-    if (transactions.length === 0) return { added: 0, byApp: {} };
+    if (!target.sure && !target.actual) return { added: 0, byApp: {}, failures: [] };
+    if (transactions.length === 0) return { added: 0, byApp: {}, failures: [] };
 
     const { importable, heldBack } = await applyCategoryMappings(transactions, mappingKey);
     if (heldBack > 0) {
@@ -345,14 +400,22 @@ export async function flushPendingCategories(settings, targetKeys, onProgress) {
         if (ready.length) {
             console.log(`Flush ${key}: importing ${ready.length} previously held transaction(s).`);
             onProgress?.(key, 0, `Importing ${ready.length} mapped`);
+            let res;
             try {
-                const { added } = await importResolved(`Flush ${key}`, settings, target, ready, onProgress && ((f, m) => onProgress(key, f, m)));
-                totalAdded += added;
+                res = await importResolved(`Flush ${key}`, settings, target, ready, onProgress && ((f, m) => onProgress(key, f, m)));
+                totalAdded += res.added;
             } finally {
                 onProgress?.(key, null, null); // clear the row's progress when done
             }
-            pendingCategoryTxns[key] = remaining;
-            changed = true;
+            // Only drain the queue when every app took the import — a partial
+            // failure keeps the rows queued so the failed app gets them later
+            // (the successful app dedups the re-send).
+            if (res.failures.length) {
+                console.warn(`Flush ${key}: keeping ${ready.length} transaction(s) queued, import failed:`, res.failures.join("; "));
+            } else {
+                pendingCategoryTxns[key] = remaining;
+                changed = true;
+            }
         }
     }
 
@@ -532,7 +595,7 @@ export async function updateLastSyncDate(key, date) {
     await chrome.storage.local.set({ lastSyncDates });
 }
 
-export async function updateLastSyncMetrics(key, transactions) {
+export async function updateLastSyncMetrics(key, transactions, byApp) {
     const { lastSyncMetrics = {}, activeSyncSessionId = null, activeSyncSummary = null, lastTxDates = {}, accountMappings = {} } = await chrome.storage.local.get([
         "lastSyncMetrics",
         "activeSyncSessionId",
@@ -569,12 +632,13 @@ export async function updateLastSyncMetrics(key, transactions) {
         for (const tx of transactions) {
             if (tx.date > maxDate) maxDate = tx.date;
         }
-        // Advance the watermark for every app the key currently maps to — this
-        // runs only after a successful import to all of them.
+        // Advance the watermark only for apps whose import succeeded (byApp has
+        // an entry per successful app); without byApp, assume all mapped apps.
         const target = appTargets(accountMappings[key]);
         const entry = normalizeTxEntry(lastTxDates[key], target);
+        const succeeded = byApp ? Object.keys(byApp) : null;
         for (const app of APPS) {
-            if (target[app]) entry[app] = maxDate;
+            if (target[app] && (succeeded == null || succeeded.includes(app))) entry[app] = maxDate;
         }
         lastTxDates[key] = entry;
         updates.lastTxDates = lastTxDates;
@@ -585,8 +649,8 @@ export async function updateLastSyncMetrics(key, transactions) {
     if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
 }
 
-export async function updateLastSyncStats(key, transactions) {
-    await updateLastSyncMetrics(key, transactions);
+export async function updateLastSyncStats(key, transactions, byApp) {
+    await updateLastSyncMetrics(key, transactions, byApp);
 }
 
 function updateSyncSummary(summary, sessionId, key, metrics) {

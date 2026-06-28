@@ -42,6 +42,7 @@ const KNOWN_LOCAL_KEYS = new Set([
   "lastSyncDates", "lastSyncMetrics", "syncErrors", "lastTxDates",
   "logBuffer",
   "cachedCategories", "categoryMappings", "pendingCategoryTxns",
+  "reconcileIgnored",
 ]);
 
 const PER_ACCOUNT_KEYS = [
@@ -149,9 +150,11 @@ function showView(view) {
   $("settings-view").style.display = view === "settings" ? "block" : "none";
   $("logs-view").style.display = view === "logs" ? "block" : "none";
   $("categories-view").style.display = view === "categories" ? "block" : "none";
+  $("reconcile-view").style.display = view === "reconcile" ? "block" : "none";
   $("settings-btn").classList.toggle("active", view === "settings");
   $("logs-btn").classList.toggle("active", view === "logs");
   $("categories-btn").classList.toggle("active", view === "categories");
+  $("reconcile-btn").classList.toggle("active", view === "reconcile");
 }
 
 $("refresh-btn").addEventListener("click", async () => {
@@ -565,6 +568,421 @@ async function saveCategoryMapping(bank, raw, select, lastValue) {
   await updateCategoriesBadge();
 }
 
+// ── Reconcile ─────────────────────────────────────────────────────────────────
+// Audits accounts mapped to both apps: category mismatches and one-sided rows.
+// Results aren't cached — the view runs a fresh comparison each time it opens.
+
+let reconcileRunning = false;
+// Ignored discrepancies, persisted so they stay collapsed across runs. Keyed by
+// `${accountKey} ${entryKey}` (see entryIgnoreKey). Must stay listed in
+// KNOWN_LOCAL_KEYS or startup cleanup will purge it.
+let reconcileIgnored = {};
+// Cache of streamed account results, so ignoring/un-ignoring re-renders a single
+// account block from data instead of re-running the whole comparison.
+const reconcileAccounts = new Map();
+
+$("reconcile-btn").addEventListener("click", async () => {
+  const inReconcile = $("reconcile-view").style.display !== "none";
+  showView(inReconcile ? "accounts" : "reconcile");
+  if (!inReconcile) await runReconcile();
+});
+
+$("reconcile-run-btn").addEventListener("click", runReconcile);
+
+async function runReconcile() {
+  if (reconcileRunning) return;
+  if (!sureConfigured || !actualConfigured) {
+    $("reconcile-output").innerHTML =
+      '<div class="rec-empty">Connect both Sure and Actual in Settings to compare transactions.</div>';
+    return;
+  }
+  reconcileRunning = true;
+  $("reconcile-run-btn").disabled = true;
+  reconcileAccounts.clear();
+  ({ reconcileIgnored = {} } = await chrome.storage.local.get("reconcileIgnored"));
+  $("reconcile-output").innerHTML = '<div class="rec-empty">Comparing transactions… this can take a moment.</div>';
+  try {
+    const res = await sendMessage({ type: "RECONCILE" });
+    // A run already going (e.g. started from another popup) isn't a failure —
+    // leave any existing results in place and just note it.
+    if (res.error === "Reconcile already in progress") {
+      $("reconcile-output").innerHTML = "";
+      $("reconcile-output").appendChild(recEmpty("A reconcile is already running — reopen this view in a moment to see the results."));
+      return;
+    }
+    if (res.error) throw new Error(res.error);
+    finishReconcileRender(res.report);
+  } catch (err) {
+    $("reconcile-output").innerHTML = "";
+    $("reconcile-output").appendChild(recEmpty(`Reconcile failed: ${err.message}`));
+  } finally {
+    reconcileRunning = false;
+    $("reconcile-run-btn").disabled = false;
+  }
+}
+
+function recEmpty(text) {
+  const el = document.createElement("div");
+  el.className = "rec-empty";
+  el.textContent = text;
+  return el;
+}
+
+// Append one account block as it streams in, clearing the "Comparing…"
+// placeholder on the first arrival.
+function appendReconcileAccount(account) {
+  const out = $("reconcile-output");
+  out.querySelector(".rec-empty")?.remove();
+  reconcileAccounts.set(account.key, account);
+  out.appendChild(buildReconcileAccount(account));
+}
+
+// Finalize the view once the run completes: drop any leftover placeholder, add
+// the window header above the streamed accounts, the empty-state when nothing
+// was comparable, and the "not compared" list. Accounts themselves already
+// rendered via appendReconcileAccount.
+function finishReconcileRender(report) {
+  const out = $("reconcile-output");
+  out.querySelector(".rec-empty")?.remove();
+
+  if (!out.querySelector(".rec-account")) {
+    out.appendChild(recEmpty("No accounts are mapped to both Sure and Actual, so there's nothing to compare."));
+  }
+
+  if (report.range) {
+    const meta = document.createElement("div");
+    meta.className = "rec-range";
+    meta.textContent = `Window: ${report.range.startDate} → ${report.range.endDate} · transfers excluded`;
+    out.insertBefore(meta, out.firstChild);
+  }
+
+  if (report.skipped?.length) {
+    const details = document.createElement("details");
+    details.className = "rec-skipped";
+    const summary = document.createElement("summary");
+    summary.textContent = `${report.skipped.length} account${report.skipped.length === 1 ? "" : "s"} not compared`;
+    details.appendChild(summary);
+    for (const s of report.skipped) {
+      const row = document.createElement("div");
+      row.className = "rec-skip-row";
+      row.textContent = `${s.key} — ${s.reason}`;
+      details.appendChild(row);
+    }
+    out.appendChild(details);
+  }
+}
+
+function ignoreId(accountKey, entryKey) {
+  return `${accountKey} ${entryKey}`;
+}
+
+// Stable per-discrepancy key for the ignore map. Keyed on the transaction's own
+// id(s) — not the date|amount|payee fingerprint — so an ignore survives payee
+// text drift (Sure merchant renaming, reworded bank descriptions) and any change
+// to fingerprint logic. Mismatches carry both app ids; one-sided rows carry the
+// single owning app's id. Falls back to the fingerprint only if no id is present.
+function entryIgnoreKey(e) {
+  if (e.sureId != null || e.actualId != null) return `m:${e.sureId ?? ""}:${e.actualId ?? ""}`;
+  if (e.id != null) return `t:${e.id}`;
+  return e.key;
+}
+function isIgnored(accountKey, entryKey) {
+  return Boolean(reconcileIgnored[ignoreId(accountKey, entryKey)]);
+}
+
+async function setIgnored(accountKey, entryKey, ignored) {
+  if (ignored) reconcileIgnored[ignoreId(accountKey, entryKey)] = true;
+  else delete reconcileIgnored[ignoreId(accountKey, entryKey)];
+  await chrome.storage.local.set({ reconcileIgnored });
+  rerenderReconcileAccount(accountKey);
+}
+
+// Rebuild a single account's block from its cached data (ignore state changed —
+// the underlying comparison hasn't, so no re-run needed).
+function rerenderReconcileAccount(accountKey) {
+  const account = reconcileAccounts.get(accountKey);
+  if (!account) return;
+  const existing = $("reconcile-output").querySelector(`.rec-account[data-key="${CSS.escape(accountKey)}"]`);
+  if (existing) existing.replaceWith(buildReconcileAccount(account));
+}
+
+function buildReconcileAccount(acct) {
+  const group = document.createElement("div");
+  group.className = "rec-account";
+  group.dataset.key = acct.key;
+
+  const header = document.createElement("div");
+  header.className = "rec-account-header";
+  header.textContent = `${acct.sureAccount} ↔ ${acct.actualAccount}`;
+  group.appendChild(header);
+
+  if (acct.error) {
+    group.appendChild(recEmpty(`Could not compare: ${acct.error}`));
+    return group;
+  }
+
+  const sub = document.createElement("div");
+  sub.className = "rec-account-sub";
+  sub.textContent =
+    `${acct.counts.matched} matched · ${acct.counts.sure} in Sure · ${acct.counts.actual} in Actual`;
+  group.appendChild(sub);
+
+  // Split each discrepancy list into still-shown rows and ignored ones.
+  const ignored = [];
+  const partition = (list, kind) => {
+    const shown = [];
+    for (const e of list || []) {
+      if (isIgnored(acct.key, entryIgnoreKey(e))) ignored.push({ kind, e });
+      else shown.push(e);
+    }
+    return shown;
+  };
+  const shownMism = partition(acct.mismatches, "mismatch");
+  const shownSure = partition(acct.missingInActual, "sure");
+  const shownActual = partition(acct.missingInSure, "actual");
+  const totalShown = shownMism.length + shownSure.length + shownActual.length;
+
+  if (totalShown === 0) {
+    const ok = document.createElement("div");
+    ok.className = "rec-clean";
+    ok.textContent = ignored.length
+      ? `✓ In sync — ${ignored.length} ignored.`
+      : "✓ In sync — categories agree and every transaction matches.";
+    group.appendChild(ok);
+  }
+
+  const ctx = { key: acct.key, label: `${acct.sureAccount} ↔ ${acct.actualAccount}` };
+
+  if (shownMism.length) {
+    group.appendChild(recSectionHeader(`${shownMism.length} category mismatch${shownMism.length === 1 ? "" : "es"}`, "warn"));
+    for (const m of shownMism) group.appendChild(buildMismatchRow(m, acct.key));
+  }
+  if (shownSure.length) {
+    group.appendChild(recSectionHeader(`${shownSure.length} in Sure, missing in Actual`, "sure"));
+    for (const t of shownSure) group.appendChild(buildOneSidedRow(t, ctx, "actual"));
+  }
+  if (shownActual.length) {
+    group.appendChild(recSectionHeader(`${shownActual.length} in Actual, missing in Sure`, "actual"));
+    for (const t of shownActual) group.appendChild(buildOneSidedRow(t, ctx, "sure"));
+  }
+
+  if (ignored.length) group.appendChild(buildIgnoredSection(acct.key, ignored));
+
+  return group;
+}
+
+// Collapsed list of ignored discrepancies, each restorable.
+function buildIgnoredSection(accountKey, ignored) {
+  const details = document.createElement("details");
+  details.className = "rec-ignored";
+
+  const summary = document.createElement("summary");
+  summary.textContent = `${ignored.length} ignored`;
+  details.appendChild(summary);
+
+  for (const { kind, e } of ignored) {
+    const row = document.createElement("div");
+    row.className = "rec-row rec-ignored-row";
+    row.appendChild(recTxMeta(e.date, e.amount, e.payee));
+
+    const label = document.createElement("div");
+    label.className = "rec-cats";
+    const span = document.createElement("span");
+    span.className = "rec-cat";
+    span.textContent = kind === "mismatch"
+      ? `${catText(e.sureCategory)} ≠ ${catText(e.actualCategory)}`
+      : kind === "sure" ? "missing in Actual" : "missing in Sure";
+    label.appendChild(span);
+    row.appendChild(label);
+
+    const actions = document.createElement("div");
+    actions.className = "rec-actions";
+    const restore = document.createElement("button");
+    restore.className = "rec-action-btn";
+    restore.textContent = "Un-ignore";
+    restore.addEventListener("click", () => setIgnored(accountKey, entryIgnoreKey(e), false));
+    actions.appendChild(restore);
+    row.appendChild(actions);
+
+    details.appendChild(row);
+  }
+  return details;
+}
+
+function recSectionHeader(text, kind) {
+  const el = document.createElement("div");
+  el.className = `rec-section-header rec-${kind}`;
+  el.textContent = text;
+  return el;
+}
+
+function recTxMeta(date, amount, payee) {
+  const meta = document.createElement("div");
+  meta.className = "rec-tx-meta";
+
+  const dateEl = document.createElement("span");
+  dateEl.className = "rec-tx-date";
+  dateEl.textContent = date;
+
+  const payeeEl = document.createElement("span");
+  payeeEl.className = "rec-tx-payee";
+  payeeEl.textContent = payee || "(no payee)";
+  payeeEl.title = payee || "";
+
+  const amtEl = document.createElement("span");
+  amtEl.className = "rec-tx-amount" + (amount < 0 ? " amount-neg" : "");
+  amtEl.textContent = formatCurrency(amount);
+
+  meta.appendChild(dateEl);
+  meta.appendChild(payeeEl);
+  meta.appendChild(amtEl);
+  return meta;
+}
+
+function catText(name) {
+  return name || "(uncategorized)";
+}
+
+function buildMismatchRow(m, accountKey) {
+  const row = document.createElement("div");
+  row.className = "rec-row";
+  row.appendChild(recTxMeta(m.date, m.amount, m.payee));
+
+  const cats = document.createElement("div");
+  cats.className = "rec-cats";
+  const sureC = document.createElement("span");
+  sureC.className = "rec-cat rec-cat-sure";
+  sureC.textContent = `Sure: ${catText(m.sureCategory)}`;
+  const arrow = document.createElement("span");
+  arrow.className = "rec-cat-arrow";
+  arrow.textContent = "≠";
+  const actualC = document.createElement("span");
+  actualC.className = "rec-cat rec-cat-actual";
+  actualC.textContent = `Actual: ${catText(m.actualCategory)}`;
+  cats.appendChild(sureC);
+  cats.appendChild(arrow);
+  cats.appendChild(actualC);
+  row.appendChild(cats);
+
+  // Accept one side → write that category onto the other app's transaction.
+  const actions = document.createElement("div");
+  actions.className = "rec-actions";
+  const useSure = document.createElement("button");
+  useSure.className = "rec-action-btn";
+  useSure.textContent = "Use Sure";
+  useSure.title = `Set Actual to ${catText(m.sureCategory)}`;
+  useSure.addEventListener("click", () =>
+    acceptMismatch(accountKey, m.key, "actual", m.actualId, m.sureCategory, actions));
+  const useActual = document.createElement("button");
+  useActual.className = "rec-action-btn";
+  useActual.textContent = "Use Actual";
+  useActual.title = `Set Sure to ${catText(m.actualCategory)}`;
+  useActual.addEventListener("click", () =>
+    acceptMismatch(accountKey, m.key, "sure", m.sureId, m.actualCategory, actions));
+  const ignore = document.createElement("button");
+  ignore.className = "rec-action-btn rec-action-ignore";
+  ignore.textContent = "Ignore";
+  ignore.title = "Hide this mismatch and collapse it under Ignored";
+  ignore.addEventListener("click", () => setIgnored(accountKey, entryIgnoreKey(m), true));
+  actions.appendChild(useSure);
+  actions.appendChild(useActual);
+  actions.appendChild(ignore);
+  row.appendChild(actions);
+  return row;
+}
+
+function buildOneSidedRow(t, ctx, resetApp) {
+  const row = document.createElement("div");
+  row.className = "rec-row";
+  row.appendChild(recTxMeta(t.date, t.amount, t.payee));
+  if (t.category) {
+    const cat = document.createElement("div");
+    cat.className = "rec-cats";
+    const c = document.createElement("span");
+    c.className = "rec-cat";
+    c.textContent = catText(t.category);
+    cat.appendChild(c);
+    row.appendChild(cat);
+  }
+
+  // Reset the app that's missing this transaction back to before its date, then
+  // resync so the gap (this row and anything after it) is re-pulled.
+  const actions = document.createElement("div");
+  actions.className = "rec-actions";
+  const resetBtn = document.createElement("button");
+  resetBtn.className = "rec-action-btn rec-action-danger";
+  resetBtn.textContent = `Reset ${APP_LABELS[resetApp]} from ${t.date} & resync`;
+  resetBtn.addEventListener("click", () => resetFrom(ctx.key, resetApp, t.date, ctx.label, actions));
+  const ignore = document.createElement("button");
+  ignore.className = "rec-action-btn rec-action-ignore";
+  ignore.textContent = "Ignore";
+  ignore.title = "Hide this transaction and collapse it under Ignored";
+  ignore.addEventListener("click", () => setIgnored(ctx.key, entryIgnoreKey(t), true));
+  actions.appendChild(resetBtn);
+  actions.appendChild(ignore);
+  row.appendChild(actions);
+  return row;
+}
+
+async function acceptMismatch(accountKey, entryKey, targetApp, transactionId, categoryName, actionsEl) {
+  setActionsDisabled(actionsEl, true);
+  showStatus(`Updating ${APP_LABELS[targetApp]} category…`, "");
+  const res = await sendMessage({ type: "RECONCILE_ACCEPT", targetApp, transactionId, categoryName });
+  if (res.error) {
+    showStatus(`Update failed: ${res.error}`, "error");
+    setActionsDisabled(actionsEl, false);
+    return;
+  }
+  showStatus(`Set ${APP_LABELS[targetApp]} to ${catText(categoryName)}.`, "ok");
+  // Drop it from the cached account too, so a later re-render (e.g. after an
+  // ignore elsewhere) doesn't resurrect this now-resolved mismatch.
+  const account = reconcileAccounts.get(accountKey);
+  const idx = account?.mismatches?.findIndex((m) => m.key === entryKey) ?? -1;
+  if (idx >= 0) account.mismatches.splice(idx, 1);
+  removeMismatchRow(actionsEl);
+}
+
+// Drop a resolved mismatch row in place (no full re-run) and keep its section
+// header's count honest — removing the header when its last row is gone.
+function removeMismatchRow(actionsEl) {
+  const row = actionsEl.closest(".rec-row");
+  if (!row) return;
+  let header = row.previousElementSibling;
+  while (header && !header.classList.contains("rec-section-header")) {
+    header = header.previousElementSibling;
+  }
+  row.remove();
+  if (!header) return;
+
+  let count = 0;
+  for (let sib = header.nextElementSibling; sib && !sib.classList.contains("rec-section-header"); sib = sib.nextElementSibling) {
+    if (sib.classList.contains("rec-row")) count++;
+  }
+  if (count === 0) header.remove();
+  else header.textContent = `${count} category mismatch${count === 1 ? "" : "es"}`;
+}
+
+async function resetFrom(key, app, date, label, actionsEl) {
+  if (!confirm(`Delete all ${APP_LABELS[app]} transactions in "${label}" on or after ${date}, then resync from there?\n\nThis deletes transactions and cannot be undone.`)) return;
+  setActionsDisabled(actionsEl, true);
+  showStatus(`Resetting ${APP_LABELS[app]} from ${date}…`, "");
+  const res = await sendMessage({ type: "RECONCILE_RESET_FROM", key, app, date });
+  if (res.error) {
+    showStatus(`Reset failed: ${res.error}`, "error");
+    setActionsDisabled(actionsEl, false);
+    return;
+  }
+  showStatus(`Deleted ${res.deleted ?? 0} ${APP_LABELS[app]} transaction${res.deleted === 1 ? "" : "s"}. Resyncing…`, "");
+  const syncRes = await sendMessage({ type: "RUN_SYNC", options: { targetKeys: [key] } });
+  if (syncRes.error) showStatus(`Resync failed: ${syncRes.error}`, "error");
+  else showStatus("Reset and resync complete.", "ok");
+  await runReconcile();
+}
+
+function setActionsDisabled(actionsEl, disabled) {
+  for (const btn of actionsEl.querySelectorAll("button")) btn.disabled = disabled;
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 $("sure-connect-btn").addEventListener("click", async () => {
@@ -759,6 +1177,15 @@ function updateSyncBtn() {
   $("sync-btn").style.display = (hasMapping && syncFromDate) ? "block" : "none";
   if (hasMapping) renderSyncStatus();
 }
+
+document.querySelectorAll(".password-toggle").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const input = document.getElementById(btn.dataset.target);
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    btn.textContent = show ? "Hide" : "Show";
+  });
+});
 
 $("sync-btn").addEventListener("click", async () => {
   await runSyncFromPopup({}, "Syncing…");
@@ -1628,6 +2055,13 @@ async function runSyncFromPopup(options, pendingMessage) {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "LOG_ENTRY") {
     appendLogLine(msg.entry);
+    return;
+  }
+
+  if (msg.type === "RECONCILE_ACCOUNT") {
+    // Only the popup that started the run appends (reconcileRunning is true);
+    // other open popups ignore the stream.
+    if (reconcileRunning) appendReconcileAccount(msg.account);
     return;
   }
 

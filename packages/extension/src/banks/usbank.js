@@ -93,6 +93,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
             await logBalanceDrift(`US Bank ${account.name}`, mappingKey, options.appBalances?.[mappingKey], result.byApp, -currentBalance);
             await applyActualStartingBalance(`US Bank ${account.name}`, settings, mapped, { mappingKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[mappingKey], byApp: result.byApp, isFirstSync, startDate, importedId: `usbank-${account.id}-starting-balance` });
             await updateLastSyncStats(mappingKey, transactions);
+            if (result.failures?.length) throw new Error(result.failures.join("; "));
             await updateLastSyncDate(mappingKey, today);
 
             reportProgress(options, mappingKey, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");

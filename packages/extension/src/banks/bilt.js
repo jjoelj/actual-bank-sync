@@ -69,20 +69,27 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
 
     const isFirstSync = !lastSyncDates[accountKey];
     let result = {};
-    if (transactions.length > 0) {
-        reportProgress(options, 80, `Importing ${transactions.length} transactions`);
-        console.log(`Bilt: importing ${transactions.length} transactions.`);
-        (result = await importTransactions("Bilt", settings, mapped, transactions, accountKey,
-            (frac, msg) => reportProgress(options, 80 + Math.round(frac * 20), msg)));
-    } else {
-        console.log("Bilt: no new transactions.");
+    try {
+        if (transactions.length > 0) {
+            reportProgress(options, 80, `Importing ${transactions.length} transactions`);
+            console.log(`Bilt: importing ${transactions.length} transactions.`);
+            (result = await importTransactions("Bilt", settings, mapped, transactions, accountKey,
+                (frac, msg) => reportProgress(options, 80 + Math.round(frac * 20), msg)));
+        } else {
+            console.log("Bilt: no new transactions.");
+        }
+        await updateLastSyncStats(accountKey, transactions, result.byApp);
+        if (result.failures?.length) throw new Error(result.failures.join("; "));
+        if (currentBalance != null) {
+            await logBalanceDrift("Bilt", accountKey, options.appBalances?.[accountKey], result.byApp, -currentBalance);
+            await applyActualStartingBalance("Bilt", settings, mapped, { mappingKey: accountKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "bilt-starting-balance" });
+        }
+        // Only mark the account synced when every mapped app imported cleanly,
+        // so a failed app is retried by the next sync.
+        await updateLastSyncDate(accountKey, today);
+    } catch (err) {
+        console.error("Bilt import failed:", err.message);
     }
-    if (currentBalance != null) {
-        await logBalanceDrift("Bilt", accountKey, options.appBalances?.[accountKey], result.byApp, -currentBalance);
-        await applyActualStartingBalance("Bilt", settings, mapped, { mappingKey: accountKey, bankBalance: -currentBalance, appBalances: options.appBalances?.[accountKey], byApp: result.byApp, isFirstSync, startDate, importedId: "bilt-starting-balance" });
-    }
-    await updateLastSyncStats(accountKey, transactions);
-    await updateLastSyncDate(accountKey, today);
 
     reportProgress(options, 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
 }
