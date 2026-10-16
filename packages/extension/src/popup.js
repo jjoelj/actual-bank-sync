@@ -19,6 +19,8 @@ function makeMutex() {
 // Guards the categoryMappings read-modify-write: mapping several categories in
 // quick succession must not drop any mapping.
 const withCategoryMappingLock = makeMutex();
+// Guards the venmoExpenseCategories read-modify-write.
+const withVenmoExpenseLock = makeMutex();
 
 let sureAccounts = [];
 let actualAccounts = [];
@@ -43,6 +45,8 @@ const KNOWN_LOCAL_KEYS = new Set([
   "logBuffer",
   "cachedCategories", "categoryMappings", "pendingCategoryTxns",
   "reconcileIgnored",
+  "venmoExpenseCategories", "venmoGroupExpenses", "venmoGroupSplits",
+  "venmoGroupActualId", "venmoGroupSureId", "venmoSureSplitState",
 ]);
 
 const PER_ACCOUNT_KEYS = [
@@ -384,7 +388,12 @@ async function getCategoryData() {
 
 async function updateCategoriesBadge() {
   const { banks } = await getCategoryData();
-  const count = banks.reduce((sum, b) => sum + b.unmapped.length, 0);
+  let count = banks.reduce((sum, b) => sum + b.unmapped.length, 0);
+  const { venmoGroupExpenses = [], venmoExpenseCategories = {} } =
+    await chrome.storage.local.get(["venmoGroupExpenses", "venmoExpenseCategories"]);
+  // Group expenses with no category decision yet (an explicit "leave
+  // uncategorized" stores "" and is not counted).
+  count += venmoGroupExpenses.filter((e) => venmoExpenseCategories[e.id] == null).length;
   const badge = $("categories-badge");
   badge.textContent = count;
   badge.style.display = count > 0 ? "" : "none";
@@ -441,7 +450,8 @@ async function renderCategoriesView() {
   const { banks, pendingCounts, examples } = await getCategoryData();
 
   out.innerHTML = "";
-  if (!banks.length) {
+  const hasVenmoGroups = await renderVenmoGroupSection(out);
+  if (!banks.length && !hasVenmoGroups) {
     out.innerHTML = '<div class="cat-empty">No categories to map yet. They appear here after a sync finds categories you haven\'t mapped.</div>';
     return;
   }
@@ -569,6 +579,100 @@ async function saveCategoryMapping(bank, raw, select, lastValue) {
   }
 
   await renderCategoriesView();
+  await updateCategoriesBadge();
+}
+
+// ── Venmo group expenses ──────────────────────────────────────────────────────
+// Per-expense category for the split reimbursements. Choosing one writes
+// venmoExpenseCategories and re-applies the splits so the child rows in Actual
+// get that category — no Venmo re-fetch (the sync cached the raw splits).
+
+async function renderVenmoGroupSection(out) {
+  const { venmoGroupExpenses = [], venmoExpenseCategories = {} } =
+    await chrome.storage.local.get(["venmoGroupExpenses", "venmoExpenseCategories"]);
+  if (!venmoGroupExpenses.length) return false;
+
+  const group = document.createElement("div");
+  group.className = "cat-bank-group";
+
+  const header = document.createElement("div");
+  header.className = "cat-bank-header";
+  header.textContent = "Venmo group expenses";
+  group.appendChild(header);
+
+  for (const exp of venmoGroupExpenses) {
+    group.appendChild(buildVenmoExpenseRow(exp, venmoExpenseCategories[exp.id]));
+  }
+  out.appendChild(group);
+  return true;
+}
+
+function buildVenmoExpenseRow(exp, currentValue) {
+  const row = document.createElement("div");
+  row.className = "cat-row" + (currentValue == null ? " is-unmapped" : "");
+
+  const info = document.createElement("div");
+  info.className = "cat-info";
+
+  const rawEl = document.createElement("div");
+  rawEl.className = "cat-raw";
+  rawEl.textContent = exp.note || "(no note)";
+  rawEl.title = exp.note || "";
+  info.appendChild(rawEl);
+
+  const meta = document.createElement("div");
+  meta.className = "cat-examples";
+  meta.textContent = [exp.group, exp.date, `$${(exp.cents / 100).toFixed(2)}`].filter(Boolean).join(" · ");
+  info.appendChild(meta);
+
+  const select = buildCategorySelect(currentValue);
+  let lastValue = select.value;
+  select.addEventListener("change", () => {
+    saveVenmoExpenseCategory(exp.id, select, lastValue).then(() => { lastValue = select.value; });
+  });
+
+  row.appendChild(info);
+  row.appendChild(select);
+  return row;
+}
+
+async function saveVenmoExpenseCategory(expenseId, select, lastValue) {
+  const choice = select.value;
+  let newValue; // undefined = unset, "" = leave uncategorized, else category name
+
+  if (choice === CAT_CREATE) {
+    const name = prompt("New category name:", "");
+    if (!name || !name.trim()) { select.value = lastValue; return; }
+    showStatus(`Creating category "${name.trim()}"…`, "");
+    const res = await sendMessage({ type: "CREATE_CATEGORY", name: name.trim() });
+    if (res.error) { showStatus(`Could not create category: ${res.error}`, "error"); select.value = lastValue; return; }
+    appCategories.push(res.category);
+    await chrome.storage.local.set({ cachedCategories: appCategories });
+    newValue = res.category.name;
+  } else if (choice === CAT_BLANK) {
+    newValue = "";
+  } else if (choice === "") {
+    newValue = undefined;
+  } else {
+    newValue = choice;
+  }
+
+  await withVenmoExpenseLock(async () => {
+    const { venmoExpenseCategories = {} } = await chrome.storage.local.get("venmoExpenseCategories");
+    if (newValue === undefined) delete venmoExpenseCategories[expenseId];
+    else venmoExpenseCategories[expenseId] = newValue;
+    await chrome.storage.local.set({ venmoExpenseCategories });
+  });
+
+  // Update this row in place rather than re-rendering — the list can be long and
+  // a full re-render would reset scroll while categorizing several in a row.
+  select.closest(".cat-row")?.classList.toggle("is-unmapped", newValue == null);
+
+  showStatus("Applying category…", "");
+  const res = await sendMessage({ type: "APPLY_VENMO_GROUP_CATEGORIES" });
+  if (res.error) showStatus(`Apply failed: ${res.error}`, "error");
+  else showStatus("Category applied.", "ok");
+
   await updateCategoriesBadge();
 }
 

@@ -223,6 +223,87 @@ try {
             }
             await actual.updateTransaction(rest.transactionId, { category: categoryId });
             result = { ok: true };
+        } else if (command === "applyActualSplits") {
+            // Split already-imported settlements into per-expense children. Each
+            // split is keyed by imported_id (the Venmo payment id the statement
+            // sync used); its subtransactions carry per-expense amounts (integer
+            // cents, same sign as the parent) and optional category names.
+            //
+            // Content-idempotent: a settlement whose current split already equals
+            // the desired one is left alone. A flat transaction is converted in
+            // place via updateTransaction (routes through loot-core's split-aware
+            // api/transaction-update, preserving payee + imported_id). An
+            // already-split transaction whose breakdown changed (a new allocation
+            // model, or categories assigned later) is deleted and re-added as a
+            // fresh split — the only reliable way to replace a parent's children
+            // through the public API.
+            const wanted = new Map(rest.splits.map((s) => [s.importedId, s]));
+            const cats = await actual.getCategories();
+            const idByName = new Map(cats.map((c) => [c.name, c.id]));
+            const txs = await getAllTransactions(rest.accountId);
+            let split = 0, updated = 0, already = 0, skipped = 0;
+            const seen = new Set();
+
+            const childKey = (c) => `${c.amount}|${c.notes ?? ""}|${c.category ?? ""}`;
+            const splitMatches = (existing, desired) => {
+                if (!existing || existing.length !== desired.length) return false;
+                const a = existing.map(childKey).sort();
+                const b = desired.map(childKey).sort();
+                return a.every((x, i) => x === b[i]);
+            };
+
+            for (const tx of txs) {
+                if (!tx.imported_id || !wanted.has(tx.imported_id) || seen.has(tx.imported_id)) continue;
+                seen.add(tx.imported_id);
+                const s = wanted.get(tx.imported_id);
+
+                const children = [];
+                let sum = 0;
+                for (const sub of s.subtransactions) {
+                    sum += sub.amountCents;
+                    children.push({
+                        amount: sub.amountCents,
+                        notes: sub.note || null,
+                        category: sub.category ? (idByName.get(sub.category) ?? null) : null,
+                    });
+                }
+                // Slices must share the parent's sign — an opposite sign means we
+                // matched the wrong transaction (or a sign bug), which would make
+                // the remainder a huge bogus child. Skip rather than write junk.
+                if (sum !== 0 && Math.sign(sum) !== Math.sign(tx.amount)) { skipped++; continue; }
+                // Children must sum to the parent exactly or Actual flags a split
+                // error; any leftover vs the imported amount is an uncategorized
+                // remainder child.
+                const remainder = tx.amount - sum;
+                if (remainder !== 0) children.push({ amount: remainder, notes: "Venmo group: unallocated", category: null });
+
+                if (tx.is_parent && splitMatches(tx.subtransactions, children)) { already++; continue; }
+
+                const subs = children.map((c) => ({
+                    amount: c.amount,
+                    notes: c.notes ?? undefined,
+                    category: c.category ?? undefined,
+                }));
+
+                if (tx.is_parent) {
+                    await actual.deleteTransaction(tx.id);
+                    await actual.addTransactions(rest.accountId, [{
+                        date: tx.date,
+                        amount: tx.amount,
+                        payee: tx.payee ?? undefined,
+                        imported_id: tx.imported_id,
+                        imported_payee: tx.imported_payee ?? undefined,
+                        notes: tx.notes ?? undefined,
+                        cleared: tx.cleared,
+                        subtransactions: subs,
+                    }]);
+                    updated++;
+                } else {
+                    await actual.updateTransaction(tx.id, { subtransactions: subs });
+                    split++;
+                }
+            }
+            result = { split, updated, already, skipped, missing: wanted.size - seen.size };
         }
     }
 

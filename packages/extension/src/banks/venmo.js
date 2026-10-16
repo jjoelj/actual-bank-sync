@@ -1,4 +1,5 @@
-import { getSyncPlan, refreshLastTxDates, parseCsvLine, toLocalDate, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, parseCsvLine, toLocalDate, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, logBalanceDrift, applyActualStartingBalance, onTabClose, appTargets } from "../utils.js";
+import { syncVenmoGroups } from "./venmoGroups.js";
 
 export async function syncVenmo(settings, accountMappings, options = {}) {
     console.log("Venmo: starting");
@@ -21,6 +22,16 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
     const creditStart = creditPlan?.startDate;
     const today = cashPlan?.endDate || creditPlan?.endDate;
 
+    // Group splits live on the venmo-cash account (settlements are venmo-cash
+    // transactions), so they run for whichever app that mapping targets. Gated
+    // on needsCash too: a settlement IS a cash transaction, so no new cash
+    // activity means no new settlement to split — skip the full group refetch on
+    // credit-only and no-op runs. Piggybacks on the existing tab.
+    const cashTargets = cashAccountId ? appTargets(cashAccountId) : {};
+    const cashActualId = cashTargets.actual ?? null;
+    const cashSureId = cashTargets.sure ?? null;
+    const runGroups = Boolean(cashActualId || cashSureId) && needsCash;
+
     if (needsCash && !cashStart) {
         console.warn("Venmo: no sync start date configured, skipping.");
         return;
@@ -38,7 +49,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
 
     let venmoData;
     try {
-        venmoData = await pollForVenmoData(tab.id, { needsProfileId: needsCash, needsBearerToken: needsCredit }, (t) => {
+        venmoData = await pollForVenmoData(tab.id, { needsProfileId: needsCash, needsBearerToken: needsCredit || runGroups }, (t) => {
             if (needsCash) reportProgress(options, "venmo-cash", 15 + Math.round(t * 35), "Logging in…");
             if (needsCredit) reportProgress(options, "venmo-credit", 15 + Math.round(t * 35), "Logging in…");
         });
@@ -119,6 +130,23 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
             reportProgress(options, "venmo-credit", 100, transactions.length ? `Imported ${transactions.length}` : "No new transactions");
         } catch (err) {
             console.error("Venmo Credit failed:", err.message);
+        }
+    }
+
+    // Split the venmo-cash settlements (money moving between you and group
+    // members) into per-expense pieces so a reimbursement offsets the category
+    // it was for, instead of reading as income. Best-effort: a failure here must
+    // not fail the Venmo sync, and re-runs are no-ops (already-split settlements
+    // are skipped in the worker).
+    if (runGroups && venmoData.bearerToken && (cashActualId || cashSureId)) {
+        try {
+            const { venmoExpenseCategories = {} } = await chrome.storage.local.get("venmoExpenseCategories");
+            const res = await syncVenmoGroups(venmoData.bearerToken, settings, cashActualId, venmoExpenseCategories, syncFromDate, cashSureId);
+            const fmt = (r) => `split ${r.split}, re-split ${r.updated}, unchanged ${r.already}, skipped ${r.skipped}, not matched ${r.missing}`;
+            if (res.actual) console.log(`Venmo Groups (Actual): ${fmt(res.actual)}`);
+            if (res.sure) console.log(`Venmo Groups (Sure): ${fmt(res.sure)}`);
+        } catch (err) {
+            console.error("Venmo Groups failed:", err.message);
         }
     }
 }

@@ -143,6 +143,31 @@ export async function reconcileAll(settings, accountMappings, range = {}, onAcco
   const actualName = new Map(actualAccounts.map((x) => [x.id, x.name]));
   const actualCatName = new Map(actualCategories.map((c) => [c.id, c.name]));
 
+  // Venmo group splits are represented differently by each app (Actual groups
+  // them into one parent row; Sure's API returns the parent AND every child as
+  // separate rows), so they never line up 1:1 and would flood reconcile with
+  // phantom "missing" rows. Their categories are managed by the group feature,
+  // not reconcile, so drop them from both sides: Actual parents by the is_parent
+  // flag, Sure parents by their tracked transaction id, and Sure children by a
+  // date|amount|name fingerprint built from the cached splits.
+  const { venmoGroupSplits = [], venmoSureSplitState = {} } =
+    await chrome.storage.local.get(["venmoGroupSplits", "venmoSureSplitState"]);
+  const sureSplitParentIds = new Set(Object.keys(venmoSureSplitState));
+  const splitChildKeys = new Set();
+  for (const s of venmoGroupSplits) {
+    const day = s.settledAt ? pacificDate(new Date(s.settledAt)) : null;
+    let sum = 0;
+    for (const sub of s.subtransactions || []) {
+      sum += sub.amountCents;
+      splitChildKeys.add(`${day}|${Math.abs(sub.amountCents)}|${(sub.note || "").toLowerCase()}`);
+    }
+    // The remainder child the split writer adds when children don't sum to the parent.
+    const remainder = (s.amountCents ?? sum) - sum;
+    if (remainder !== 0) splitChildKeys.add(`${day}|${Math.abs(remainder)}|venmo group: unallocated`);
+  }
+  const isSureSplitRow = (r) =>
+    sureSplitParentIds.has(r.id) || splitChildKeys.has(`${r.date}|${Math.abs(r.amount)}|${(r.payee || "").toLowerCase()}`);
+
   const accounts = [];
   const skipped = [];
 
@@ -182,6 +207,7 @@ export async function reconcileAll(settings, accountMappings, range = {}, onAcco
         payee: tx.imported_payee || tx.payee_name,
         category: tx.category ? (actualCatName.get(tx.category) ?? null) : null,
         isTransfer: Boolean(tx.transfer_id),
+        isParent: Boolean(tx.is_parent),
       }));
 
       // A transfer that one app pairs but the other imported as a plain
@@ -198,6 +224,7 @@ export async function reconcileAll(settings, accountMappings, range = {}, onAcco
       const sureRows = [];
       for (const r of sureNorm) {
         if (isTransferRow(r)) { sureTransfers++; continue; }
+        if (isSureSplitRow(r)) continue; // venmo group split parent/child — not reconciled
         sureRows.push({ ...r, key: fingerprint(r.date, r.amount, r.payee) });
       }
 
@@ -205,6 +232,7 @@ export async function reconcileAll(settings, accountMappings, range = {}, onAcco
       const actualRows = [];
       for (const r of actualNorm) {
         if (isTransferRow(r)) { actualTransfers++; continue; }
+        if (r.isParent) continue; // split parent — its children live in the split, not reconciled
         actualRows.push({ ...r, key: fingerprint(r.date, r.amount, r.payee) });
       }
 

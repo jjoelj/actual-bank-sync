@@ -15,6 +15,7 @@ export const COMMANDS = new Set([
   "deleteAllTransactions",
   "deleteTransactionsFrom",
   "updateTransactionCategory",
+  "applyActualSplits",
 ]);
 
 export async function runCommand(settings, command, args) {

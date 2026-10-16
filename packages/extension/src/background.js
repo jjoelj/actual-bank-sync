@@ -3,6 +3,7 @@ installLogCapture();
 
 import { syncSoFi, getSoFiAccountsForPopup } from "./banks/sofi.js";
 import { syncVenmo } from "./banks/venmo.js";
+import { applyVenmoGroupCategories } from "./banks/venmoGroups.js";
 import { syncBilt } from "./banks/bilt.js";
 import { syncCapitalOne, getCapitalOneAccountsForPopup } from "./banks/capitalone.js";
 import { syncFidelity } from "./banks/fidelity.js";
@@ -475,6 +476,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     requestFlush();
     sendResponse({ ok: true });
     return false;
+  }
+
+  if (msg.type === "APPLY_VENMO_GROUP_CATEGORIES") {
+    getStoredSettings()
+      .then((settings) => applyVenmoGroupCategories(settings))
+      .then((result) => sendResponse({ result }))
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
   }
 
   if (msg.type === "GET_SOFI_ACCOUNTS") {
