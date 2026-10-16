@@ -139,7 +139,7 @@ function pollForTargetData(tabId, onTick) {
                         });
                         if (probe?.result) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
-                            loginAt = await autoLogin(tabId, "target", { submit: "click" }) ? Date.now() : 0;   // Enter doesn't submit this form
+                            loginAt = await autoLogin(tabId, "target", { submit: "space" }) ? Date.now() : 0;   // Enter doesn't submit this form
                         }
                     }
                     const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - dataPageStart > 15000;
