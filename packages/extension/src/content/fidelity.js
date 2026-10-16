@@ -87,3 +87,6 @@ onMessage("FETCH_FIDELITY_TRANSACTIONS", async ({ accessToken, accountToken, sta
 
     return { transactions: all };
 });
+
+// Sign-in page (digital.fidelity.com/prgw/...): auto-login and saving manual logins.
+registerLogin("fidelity", "#dom-pswd-input");

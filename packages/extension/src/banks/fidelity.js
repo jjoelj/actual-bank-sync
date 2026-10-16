@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, pacificDate, toLocalDate, getDateChunks, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncFidelity(settings, accountMappings, accountKey, options = {}) {
@@ -18,8 +19,6 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
     if (!mapped) return;
 
     const tab = await openTabBackground("https://digital.fidelity.com/ftgw/digital/portfolio/summary");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     let fidelityData;
     let rawTransactions;
@@ -151,6 +150,9 @@ function pollForFidelityData(tabId, onTick) {
         let fidelityState = "click-card";
         let busy = false;
         let lastClickTime = 0;
+        let loginAttempted = false;
+        let loginAt = 0;
+        let shownToUser = false;
 
         const interval = setInterval(async () => {
             if (busy) return;
@@ -176,6 +178,30 @@ function pollForFidelityData(tabId, onTick) {
                 }
 
                 if (tab.status !== "complete") return;
+
+                // Sign-in (and any MFA step) lives under /prgw/: type the saved
+                // login once; come to the front 20s after that submit, or after
+                // 15s there if no password field ever showed.
+                if (tab.url?.includes("digital.fidelity.com/prgw/")) {
+                    if (!loginAttempted) {
+                        const [probe] = await chrome.scripting.executeScript({
+                            target: { tabId: trackingTabId },
+                            func: () => !!document.querySelector("#dom-pswd-input"),
+                        });
+                        if (probe?.result) {
+                            loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            loginAt = await autoLogin(trackingTabId, "fidelity") ? Date.now() : 0;
+                        }
+                    }
+                    const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - dataPageStart > 15000;
+                    if (!shownToUser && giveUp) {
+                        shownToUser = true;
+                        console.log("Fidelity: waiting for login...");
+                        chrome.tabs.update(trackingTabId, { active: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
+                    }
+                    return;
+                }
 
                 if (fidelityState === "click-card" && tab.url?.includes("digital.fidelity.com")) {
                     if (/#\d{4}/.test(tab.url)) {
