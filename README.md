@@ -100,7 +100,17 @@ Set a **start date** for any accounts that haven't been synced before.
 
 ### 6. Sync
 
-Click **Sync Now** to run immediately, or let it run automatically once per day when Chrome is open.
+Click **Sync Now** to run immediately, or let it run automatically once a day while the browser is running.
+
+To keep scheduled syncs running when no browser window is open, turn on
+**Continue running background extensions and apps when … is closed**
+(`edge://settings/system` or `chrome://settings/system`). In Edge, also turn on
+**Startup boost** so it starts in the background when you sign in to Windows.
+
+### 7. Save your bank logins (optional, Windows)
+
+Sign in to each bank once by hand, in any tab. The extension saves that login
+and uses it to sign in by itself on later syncs. See [Saved logins](#saved-logins).
 
 ## SoFi internal transfers (required rule setup)
 
@@ -128,13 +138,55 @@ inflow.** Create one rule per SoFi account that can receive transfers. Example
 A "From …" row with no matching "To …" (e.g. the source account isn't synced)
 is kept and imported as a regular inflow.
 
+## Saved logins
+
+When you sign in to a supported bank by hand, the extension saves the username
+and password. During a sync, if the bank asks you to sign in, it types them for
+you and submits. If that fails, or the bank asks for something it can't do (a
+texted code, an email link), the sync window comes up and you finish signing in
+yourself; the sync then carries on. Your manual sign-in also updates the saved
+login, so a changed password fixes itself.
+
+| Bank | Signs in by itself | Notes |
+|---|---|---|
+| Samsung (Barclays), Capital One, Fidelity, Target, SoFi, Venmo | Yes | |
+| US Bank, Wells Fargo | Yes, up to the texted code | The window comes up at the code screen; you enter the code |
+| BILT | No | Signs in by texted code and email link |
+
+How it works:
+
+- **Storage:** logins are encrypted with Windows' DPAPI, tied to your Windows
+  account, by the native host. The extension only stores the encrypted blob
+  (`savedLogins` in its local storage). Anything running as your Windows user
+  can decrypt them, the same as the browser's own saved passwords. Saved logins
+  are Windows-only.
+- **Typing:** the extension uses the `debugger` permission to send real
+  keystrokes, so the bank sees normal typing. While it signs in, the browser
+  shows a "started debugging this browser" bar for a few seconds. It checks
+  every field before submitting and never submits a mistyped password.
+- **Hidden windows:** syncs run in their own minimized window, which only comes
+  up when you're needed. Bank pages are told they're visible so they keep
+  loading while minimized.
+
+To see which banks have a saved login, or forget one, run this in the
+extension's service-worker console (`edge://extensions` → **Inspect views:
+service worker**):
+
+```js
+Object.keys((await chrome.storage.local.get("savedLogins")).savedLogins || {})
+
+const { savedLogins = {} } = await chrome.storage.local.get("savedLogins");
+delete savedLogins.fidelity;   // the bank to forget
+await chrome.storage.local.set({ savedLogins });
+```
+
 ## How it works
 
-1. A weekly alarm fires when Chrome starts (or run **Sync Now** manually)
-2. For each mapped account, the background script opens the bank's page, waits for it to load, and downloads transactions (from the account's last-transaction watermark to today)
+1. A daily alarm fires while the browser is running (around noon the day after the last sync), or at its next start if it was missed (or run **Sync Now** manually)
+2. For each mapped account, the background script opens the bank's page in a minimized window, signs in with the saved login if needed, and downloads transactions (from the account's last-transaction watermark to today)
 3. Transactions are delivered to every app the account is mapped to:
    - **Actual** — via the native messaging host (a local Node.js process) using `@actual-app/api`; deduplicated by `imported_id`, and an account's first sync also imports a synthetic **Starting Balance** transaction so its balance matches the bank
-   - **Sure** — via its REST API as a CSV import; deduplicated by date/amount/payee fingerprint, with categories applied per transaction afterward
+   - **Sure** — via its REST API as a CSV import; deduplicated by date and amount (not payee, since Sure renames merchants after import), with categories applied per transaction afterward
 4. Bank categories you haven't mapped yet hold their transactions back (see the 🏷 view); once mapped, held transactions import automatically. Mappings store category *names*, resolved per app at import time
 5. Re-running a sync is safe in both apps
 
@@ -145,6 +197,6 @@ Transaction data is cached locally at:
 
 ## Notes
 
-- The extension opens bank tabs in the background to fetch transactions. Some banks may require you to be logged in first.
+- The extension opens bank pages in a minimized window to fetch transactions. If a bank needs you (a sign-in it can't complete, a texted code), that window comes up.
 - This uses screen-scraping and CSV exports, not official bank APIs. Banks can change their websites at any time and break things.
 - Using automated scripts to access bank accounts may violate your bank's terms of service. Use at your own risk.

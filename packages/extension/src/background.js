@@ -25,7 +25,7 @@ const SINGLE_ACCOUNT_SYNC = {
 };
 
 const ALARM_NAME = "scheduled-sync";
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;   // daily
 const MIN_ALARM_DELAY_MS = 60 * 1000;
 
 // ── App configuration ────────────────────────────────────────────────────────
@@ -623,7 +623,7 @@ async function scheduleNextSyncAlarm() {
   const candidateTimes = mappedKeys
     .map((key) => lastSyncDates[key] || syncFromDate)
     .filter(Boolean)
-    .map((isoStr) => new Date(`${isoStr}T12:00:00`).getTime() + WEEK_MS);
+    .map((isoStr) => new Date(`${isoStr}T12:00:00`).getTime() + SYNC_INTERVAL_MS);
 
   if (!candidateTimes.length) {
     await chrome.alarms.clear(ALARM_NAME);
