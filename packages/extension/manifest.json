@@ -28,7 +28,9 @@
     "https://api.usbank.com/*",
     "https://mytargetcirclecard.target.com/*",
     "https://onlinebanking.usbank.com/*",
-    "https://*.wellsfargo.com/*"
+    "https://*.wellsfargo.com/*",
+    "https://www.barclaycardus.com/*",
+    "https://cards.barclaycardus.com/*"
   ],
 
   "background": {
@@ -81,6 +83,12 @@
       "matches": ["https://connect.secure.wellsfargo.com/*"],
       "js": ["src/content/content-utils.js", "src/content/wellsfargo.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.barclaycardus.com/*", "https://cards.barclaycardus.com/*"],
+      "js": ["src/content/content-utils.js", "src/content/samsung.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

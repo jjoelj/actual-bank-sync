@@ -14,6 +14,7 @@ export const BANK_LABELS = {
   target:      "Target",
   usbank:      "US Bank",
   wf:          "Wells Fargo",
+  samsung:     "Samsung",
 };
 
 // Derive the bank id from a mapping key. Banks whose accounts are discovered
@@ -37,4 +38,5 @@ export const ACCOUNT_TYPES = {
   "target-credit":     { label: "Circle Card",   bank: "target" },
   "usbank-cards":      { label: "Cards",         bank: "usbank" },
   "wf-cards":          { label: "Cards",         bank: "wf" },
+  "samsung-credit":    { label: "Galaxy Card",   bank: "samsung" },
 };

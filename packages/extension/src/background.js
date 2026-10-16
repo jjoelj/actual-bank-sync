@@ -10,6 +10,7 @@ import { syncFidelity } from "./banks/fidelity.js";
 import { syncTarget } from "./banks/target.js";
 import { syncUSBank, getUSBankAccountsForPopup } from "./banks/usbank.js";
 import { syncWellsFargo, getWellsFargoAccountsForPopup } from "./banks/wellsfargo.js";
+import { syncSamsung } from "./banks/samsung.js";
 import * as sure from "./sure.js";
 import { sendToHost } from "./host.js";
 import { reconcileAll } from "./reconcile.js";
@@ -20,6 +21,7 @@ const SINGLE_ACCOUNT_SYNC = {
   bilt:     syncBilt,
   fidelity: syncFidelity,
   target:   syncTarget,
+  samsung:  syncSamsung,
 };
 
 const ALARM_NAME = "scheduled-sync";

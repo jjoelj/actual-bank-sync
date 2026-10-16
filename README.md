@@ -18,6 +18,7 @@ These are the specific cards/accounts this has been tested with. Similar account
 | BILT | BILT Mastercard |
 | Target | Circle Card |
 | Venmo | Venmo Cash, Venmo Credit Card |
+| Samsung (Barclays) | Galaxy Card |
 
 ## Requirements
 
