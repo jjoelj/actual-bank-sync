@@ -10,7 +10,8 @@
     "tabs",
     "nativeMessaging",
     "scripting",
-    "cookies"
+    "cookies",
+    "debugger"
   ],
 
   "optional_host_permissions": [
@@ -44,6 +45,19 @@
   },
 
   "content_scripts": [
+    {
+      "matches": [
+        "https://www.sofi.com/*", "https://login.sofi.com/*", "https://*.venmo.com/*",
+        "https://www.bilt.com/*", "https://myaccounts.capitalone.com/*",
+        "https://login.fidelityrewards.com/*", "https://digital.fidelity.com/*",
+        "https://mytargetcirclecard.target.com/*", "https://onlinebanking.usbank.com/*",
+        "https://*.wellsfargo.com/*", "https://www.barclaycardus.com/*", "https://cards.barclaycardus.com/*"
+      ],
+      "js": ["src/content/visible.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
     {
       "matches": ["https://www.sofi.com/my/banking/*"],
       "js": ["src/content/content-utils.js", "src/content/sofi.js"],

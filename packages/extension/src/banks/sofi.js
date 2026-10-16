@@ -313,7 +313,7 @@ function pollForApolloState(tabId, onTick) {
                     if (!shownToUser) {
                         shownToUser = true;
                         chrome.tabs.update(tabId, { active: true });
-                        chrome.windows.update(tab.windowId, { focused: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                         console.log("SoFi: waiting for login...");
                     }
                     return;

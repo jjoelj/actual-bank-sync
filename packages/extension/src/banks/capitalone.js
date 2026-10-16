@@ -11,7 +11,7 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://myaccounts.capitalone.com/accountSummary");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
     activeKeys.forEach(k => reportProgress(options, k, 15, "Opening Capital One…"));
 
     let caponeAccounts;
@@ -74,7 +74,7 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
 export async function getCapitalOneAccountsForPopup() {
     const tab = await openTabBackground("https://myaccounts.capitalone.com/accountSummary");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     try {
         return await pollForCapitalOneAccounts(tab.id);
@@ -107,7 +107,7 @@ function pollForCapitalOneAccounts(tabId, onTick) {
                     if (!shownToUser) {
                         shownToUser = true;
                         chrome.tabs.update(tabId, { active: true });
-                        chrome.windows.update(tab.windowId, { focused: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                         console.log("Capital One: waiting for login...");
                     }
                     return;
@@ -144,6 +144,9 @@ async function fetchCapitalOneAccounts() {
             "x-ui-routing-id": "accountSummary",
         },
         credentials: "include",
+        // Logged out → SSO redirect to verified.capitalone.com; don't follow it
+        // (CORS noise every poll tick, and needless hits on their auth host).
+        redirect: "manual",
     });
     if (!response.ok) return [];
     const json = await response.json();

@@ -38,3 +38,18 @@ function sendToHostNow(command, payload = {}) {
         }
     });
 }
+
+// ── Saved bank logins ────────────────────────────────────────────────────────
+// Only the DPAPI-encrypted blob is stored; the host decrypts it on demand.
+
+export async function saveLogin(bank, login) {
+    const blob = await sendToHost("protect", { text: JSON.stringify(login) });
+    const { savedLogins = {} } = await chrome.storage.local.get("savedLogins");
+    await chrome.storage.local.set({ savedLogins: { ...savedLogins, [bank]: blob } });
+}
+
+export async function loadLogin(bank) {
+    const { savedLogins = {} } = await chrome.storage.local.get("savedLogins");
+    if (!savedLogins[bank]) return null;
+    return JSON.parse(await sendToHost("unprotect", { blob: savedLogins[bank] }));
+}

@@ -19,6 +19,7 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     if (!mapped) return;
 
     const tab = await openTabBackground("https://www.bilt.com/wallet");
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });   // no auto-login yet
 
     let transactions = [];
     let currentBalance = null;

@@ -617,9 +617,13 @@ export function reportProgress(options, ...args) {
 
 // ── Tab helpers ──────────────────────────────────────────────────────────────
 
+// Opens in its own minimized window so syncs stay out of sight; bringing it up
+// for a manual login takes windows.update({ state: "normal", focused: true }).
+// ponytail: hidden pages get timer throttling; if a bank stalls minimized, give
+// that bank a normal window again.
 export function openTabBackground(url) {
     return new Promise((resolve, reject) => {
-        chrome.windows.create({ url, type: "normal", width: 1200, height: 800 }, (win) => {
+        chrome.windows.create({ url, type: "normal", state: "minimized" }, (win) => {
             if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
             } else {

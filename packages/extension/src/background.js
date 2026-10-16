@@ -12,7 +12,7 @@ import { syncUSBank, getUSBankAccountsForPopup } from "./banks/usbank.js";
 import { syncWellsFargo, getWellsFargoAccountsForPopup } from "./banks/wellsfargo.js";
 import { syncSamsung } from "./banks/samsung.js";
 import * as sure from "./sure.js";
-import { sendToHost } from "./host.js";
+import { sendToHost, saveLogin } from "./host.js";
 import { reconcileAll } from "./reconcile.js";
 import { ACCOUNT_TYPES } from "./accounts.js";
 import { pacificDate, flushPendingCategories, appTargets, migrateAccountMappings, offsetDate } from "./utils.js";
@@ -420,6 +420,14 @@ async function resetAccountFrom(key, app, fromDate) {
 // ── Message handler (from popup) ─────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // From a bank content script when the user logs in by hand.
+  if (msg.type === "SAVE_LOGIN" && sender.tab) {
+    saveLogin(msg.bank, { username: msg.username, password: msg.password })
+      .then(() => { console.log(`Saved login for ${msg.bank}`); sendResponse({ ok: true }); })
+      .catch((err) => { console.error(`Saving ${msg.bank} login failed:`, err.message); sendResponse({ error: err.message }); });
+    return true;
+  }
+
   if (msg.type === "TEST_SURE_CONNECTION") {
     sure.testConnection()
         .then(() => sendResponse({ ok: true }))

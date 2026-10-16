@@ -19,7 +19,7 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
 
     const tab = await openTabBackground("https://digital.fidelity.com/ftgw/digital/portfolio/summary");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     let fidelityData;
     let rawTransactions;

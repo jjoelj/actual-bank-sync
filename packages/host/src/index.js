@@ -1,4 +1,26 @@
+import { execFileSync } from "child_process";
 import { COMMANDS, runCommand, closeActual } from "./actual.js";
+
+// Saved bank logins are encrypted with Windows DPAPI (CurrentUser scope): the
+// blob lives in extension storage, but only this Windows account can decrypt it.
+// Base64 on the wire keeps non-ASCII passwords safe from console code pages, and
+// stdin (not argv) keeps them out of process listings.
+// Plain .NET (no cmdlets): Windows PowerShell can't autoload its modules when it
+// inherits PowerShell 7's PSModulePath.
+// ponytail: Windows-only; macOS would need `security add-generic-password`.
+function dpapi(method, base64In) {
+  if (process.platform !== "win32") throw new Error("Saved logins are only supported on Windows");
+  const script = "[void][Reflection.Assembly]::LoadWithPartialName('System.Security');" +
+    `[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::${method}(` +
+    "[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()), $null, 'CurrentUser'))";
+  return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script],
+    { input: base64In, encoding: "utf8", windowsHide: true }).trim();
+}
+
+const LOCAL_COMMANDS = {
+  protect: ({ text }) => dpapi("Protect", Buffer.from(text, "utf8").toString("base64")),
+  unprotect: ({ blob }) => Buffer.from(dpapi("Unprotect", blob), "base64").toString("utf8"),
+};
 
 async function main() {
   process.stdin.resume();
@@ -11,7 +33,9 @@ async function main() {
   let error = null;
 
   try {
-    if (COMMANDS.has(command)) {
+    if (LOCAL_COMMANDS[command]) {
+      result = LOCAL_COMMANDS[command](rest);
+    } else if (COMMANDS.has(command)) {
       result = await runCommand(settings, command, rest);
     } else {
       error = `Unknown command: ${command}`;

@@ -48,6 +48,7 @@ const KNOWN_LOCAL_KEYS = new Set([
   "rewardsCategories", "bankCategorySpend", "backfillFrom",
   "venmoExpenseCategories", "venmoGroupExpenses", "venmoGroupSplits",
   "venmoGroupActualId", "venmoGroupSureId", "venmoSureSplitState",
+  "savedLogins",
 ]);
 
 const PER_ACCOUNT_KEYS = [

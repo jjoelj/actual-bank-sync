@@ -11,7 +11,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://onlinebanking.usbank.com/auth/login/");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
     activeKeys.forEach(k => reportProgress(options, k, 15, "Opening US Bank…"));
 
     let usbankData;
@@ -108,7 +108,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
 export async function getUSBankAccountsForPopup() {
     const tab = await openTabBackground("https://onlinebanking.usbank.com/auth/login/");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     try {
         const data = await pollForUSBankData(tab.id);

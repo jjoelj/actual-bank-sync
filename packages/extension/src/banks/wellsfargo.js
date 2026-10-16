@@ -21,7 +21,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
 
     const tab = await openTabBackground("https://www.wellsfargo.com/");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     const wfAccountId = accountKey.slice("wf-".length);
 
@@ -249,7 +249,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
 export async function getWellsFargoAccountsForPopup() {
     const tab = await openTabBackground("https://www.wellsfargo.com/");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     try {
         return await pollForWFAccounts(tab.id);

@@ -45,7 +45,7 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
     if (needsCash) reportProgress(options, "venmo-cash", 15, "Opening Venmo…");
     if (needsCredit) reportProgress(options, "venmo-credit", 15, "Opening Venmo…");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     let venmoData;
     try {

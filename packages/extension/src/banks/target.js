@@ -18,7 +18,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
 
     const tab = await openTabBackground("https://mytargetcirclecard.target.com/account/transaction-history");
     chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
+    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     let transactions;
     let balance = null;
