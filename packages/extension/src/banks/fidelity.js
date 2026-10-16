@@ -222,9 +222,22 @@ function pollForFidelityData(tabId, onTick) {
                     if (fidelityState === "await-redirect") return;
                     if (!listenerRegistered) {
                         listenerRegistered = true;
-                        chrome.tabs.onCreated.addListener(function createdListener() {
+                        // "Download transactions" opens the rewards hand-off in a
+                        // new tab, which Edge shows. Pull it into the sync window
+                        // and re-minimize: only its URL is needed (ssoListener).
+                        // ponytail: it can still flash for a moment; stopping the
+                        // new tab altogether means rewriting Fidelity's link.
+                        chrome.tabs.onCreated.addListener(async function createdListener(newTab) {
+                            if (newTab.openerTabId !== trackingTabId) return;   // not ours (e.g. a tab you opened)
                             chrome.tabs.onCreated.removeListener(createdListener);
                             fidelityState = "await-redirect";
+                            try {
+                                const { windowId } = await chrome.tabs.get(trackingTabId);
+                                if (newTab.windowId !== windowId) await chrome.tabs.move(newTab.id, { windowId, index: -1 });
+                                await chrome.windows.update(windowId, { state: "minimized" });
+                            } catch (err) {
+                                console.warn("Fidelity: couldn't hide the hand-off tab:", err.message);
+                            }
                         });
                         chrome.tabs.onUpdated.addListener(function ssoListener(updatedTabId, changeInfo) {
                             if (!changeInfo.url?.includes("fidelityrewards.com")) return;
