@@ -730,7 +730,9 @@ input[readonly]{ color: var(--text-dim); cursor: not-allowed; }
 /* ── Account rows ── */
 .account-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(120px, 144px) auto auto auto;
+  /* One column per action button — sharing a column stacks them, hiding all but
+     the last-painted one. */
+  grid-template-columns: auto minmax(0, 1fr) minmax(120px, 144px) auto auto auto auto;
   grid-template-rows: auto;
   gap: 4px 8px;
   align-items: center;
@@ -951,7 +953,9 @@ option:disabled { color: var(--text-dim); }
 .icon-btn.remove:hover { color: var(--error); background: transparent; }
 
 .edit-mapping { grid-column: 4; }
-.remove       { grid-column: 5; }
+.sync-one     { grid-column: 5; }
+.delete-txns  { grid-column: 6; }
+.remove       { grid-column: 7; }
 
 .account-row:not(.is-mapped) .edit-mapping,
 .account-row.is-editing .edit-mapping {
@@ -1087,3 +1091,4 @@ option:disabled { color: var(--text-dim); }
 }
 
 .dropdown-option:hover { background: var(--border); }
+
