@@ -48,11 +48,20 @@ function registerLogin(bank, pwSel) {
     // pages the reply comes from the login iframe; no frame answering rejects
     // the send.
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-        if (msg.type !== "FOCUS_LOGIN_FIELD" && msg.type !== "VERIFY_LOGIN_FIELD") return;
+        if (!["FOCUS_LOGIN_FIELD", "VERIFY_LOGIN_FIELD", "LOGIN_SUBMIT_POINT"].includes(msg.type)) return;
         if (!document.querySelector(pwSel)) return;
         (async () => {
             if (!await waitForUsablePassword(pwSel)) return { ok: false, matches: false };
-            const { pw, user } = loginFields(pwSel);
+            const { pw, user, scope } = loginFields(pwSel);
+            if (msg.type === "LOGIN_SUBMIT_POINT") {
+                // Viewport centre of the submit button, for a trusted mouse click.
+                // Only meaningful in the top frame (iframe coords are offset).
+                const btn = [...scope.querySelectorAll('button[type=submit], input[type=submit], button:not([type])')].find(usable);
+                if (!btn || window !== window.top) return { ok: false };
+                btn.scrollIntoView({ block: "center" });
+                const r = btn.getBoundingClientRect();
+                return { ok: true, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
             const el = msg.field === "password" ? pw : user;
             if (!usable(el)) return { ok: false, matches: false };   // e.g. no username box (remembered)
             if (msg.type === "VERIFY_LOGIN_FIELD") return { matches: el.value === msg.value };

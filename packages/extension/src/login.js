@@ -7,7 +7,9 @@ import { loadLogin } from "./host.js";
 // Edge shows a "debugging this browser" bar while attached (a few seconds).
 // Resolves false when there's nothing saved or it couldn't type; the caller
 // falls back to a manual login.
-export async function autoLogin(tabId, bank) {
+// submit: "enter" (default) presses Enter in the password field; "click"
+// clicks the form's submit button, for forms that ignore Enter (Target).
+export async function autoLogin(tabId, bank, { submit = "enter" } = {}) {
     const login = await loadLogin(bank).catch(err => {
         console.warn(`${bank}: couldn't load saved login:`, err.message);
         return null;
@@ -38,9 +40,15 @@ export async function autoLogin(tabId, bank) {
         }
         await typeInto(tabId, send, "password", login.password);
         await jitter(300, 700);
-        // Re-focus so Enter can't land elsewhere (select-all doesn't change the value).
-        if (!(await ask(tabId, { type: "FOCUS_LOGIN_FIELD", field: "password" })).ok) throw new Error("lost the password field before submitting");
-        await pressKey(send, { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+        if (submit === "click") {
+            const point = await ask(tabId, { type: "LOGIN_SUBMIT_POINT" });
+            if (!point.ok) throw new Error("couldn't find the submit button");
+            await clickAt(send, point.x, point.y);
+        } else {
+            // Re-focus so Enter can't land elsewhere (select-all doesn't change the value).
+            if (!(await ask(tabId, { type: "FOCUS_LOGIN_FIELD", field: "password" })).ok) throw new Error("lost the password field before submitting");
+            await pressKey(send, { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+        }
         console.log(`${bank}: submitted saved login`);
         return true;
     } catch (err) {
@@ -93,6 +101,18 @@ function keyFor(ch) {
     }
     if (/\d/.test(ch)) return { code: `Digit${ch}`, windowsVirtualKeyCode: ch.charCodeAt(0) };
     return {};
+}
+
+// Trusted left click: a short approach, then press/release.
+async function clickAt(send, x, y) {
+    const mouse = (type, px, py, extra = {}) => send("Input.dispatchMouseEvent", { type, x: px, y: py, ...extra });
+    await mouse("mouseMoved", x - 40 + Math.random() * 10, y + 15);
+    await jitter(80, 160);
+    await mouse("mouseMoved", x + Math.random() * 4 - 2, y + Math.random() * 4 - 2);
+    await jitter(60, 140);
+    await mouse("mousePressed", x, y, { button: "left", buttons: 1, clickCount: 1 });
+    await jitter(50, 120);
+    await mouse("mouseReleased", x, y, { button: "left", buttons: 0, clickCount: 1 });
 }
 
 async function pressKey(send, key) {
