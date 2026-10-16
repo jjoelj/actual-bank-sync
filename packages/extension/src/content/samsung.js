@@ -12,6 +12,16 @@ onMessage("FETCH_SAMSUNG_TRANSACTIONS", ({ accountId, cycleDate = "9999-12-31" }
         .then(json => ({ data: json?.data || [] }))
 );
 
+// Latest statement's closing date, which names the most recent closed cycle.
+onMessage("FETCH_SAMSUNG_LAST_CLOSE", () =>
+    fetch(`${BASE}/paymentTile/?_=${Date.now()}`, {
+        headers: { accept: "*/*", "bcus-ajax": "true", "x-requested-with": "XMLHttpRequest" },
+        credentials: "include",
+    })
+        .then(r => { if (!r.ok) throw new Error(`paymentTile ${r.status}`); return r.json(); })
+        .then(d => ({ statementBalanceDate: d?.statementBalanceDate }))
+);
+
 onMessage("FETCH_SAMSUNG_BALANCE", () =>
     fetch(`${BASE}/accountTile/?_=${Date.now()}`, {
         headers: { accept: "*/*", "bcus-ajax": "true", "x-requested-with": "XMLHttpRequest" },

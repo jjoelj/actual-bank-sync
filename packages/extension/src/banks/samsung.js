@@ -40,14 +40,21 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
         try {
             reportProgress(options, 55, "Fetching transactions");
             // Every statement cycle the window overlaps; ids dedup any overlap.
+            // Past cycles are named by exact closing date (any other date
+            // returns no rows), so get the real latest one from Barclays.
+            const closeResult = await chrome.tabs.sendMessage(tab.id, { type: "FETCH_SAMSUNG_LAST_CLOSE" });
+            const lastClose = parseCloseDate(closeResult.statementBalanceDate);
+            if (!lastClose) {
+                throw new Error(`no statement closing date (${closeResult.error || JSON.stringify(closeResult.statementBalanceDate)}); past cycles can't be fetched`);
+            }
             const byId = new Map();
-            for (const cycleDate of samsungCycleDates(startDate, today)) {
+            for (const cycleDate of samsungCycleDates(startDate, lastClose)) {
                 const result = await chrome.tabs.sendMessage(tab.id, { type: "FETCH_SAMSUNG_TRANSACTIONS", accountId, cycleDate });
                 if (result.error) throw new Error(`cycle ${cycleDate}: ${result.error}`);
                 // A wrong closing date returns 200 + no rows, indistinguishable
                 // from a quiet month, so say so.
                 if (!result.data.length && cycleDate !== "9999-12-31") {
-                    console.warn(`Samsung: no transactions for the cycle closing ${cycleDate}. If that's wrong, SAMSUNG_CLOSE_DAY is off.`);
+                    console.warn(`Samsung: no transactions for the cycle closing ${cycleDate}; if that's wrong, the close day changed in an older cycle.`);
                 }
                 for (const item of result.data) byId.set(item.id, item);
             }
@@ -204,21 +211,32 @@ function pollForSamsungData(tabId, onTick) {
     });
 }
 
-// ponytail: this card's statement closes on the 11th every month (Oct 2026
-// statement). Barclays has no cycle list we use, so closing dates are computed.
-// If the close day ever moves, past cycles fetch empty and the balance-drift log
-// shows the gap: update this.
-const SAMSUNG_CLOSE_DAY = 11;
+// paymentTile's statementBalanceDate → "YYYY-MM-DD". Accepts ISO or US
+// "MM/DD/YYYY"; anything else → null.
+export function parseCloseDate(str) {
+    const s = String(str ?? "");
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return iso.slice(1).join("-");
+    const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+    return null;
+}
 
 // cycleDates to fetch so [startDate, today] is covered: the current cycle plus
 // every closed cycle whose closing date is on/after startDate (a cycle closing
-// on C holds transactions from the previous close through C).
-export function samsungCycleDates(startDate, today) {
+// on C holds transactions from the previous close through C). lastClose is the
+// real latest closing date (paymentTile); older closes repeat its day of month.
+// ponytail: older closes assume a fixed close day (true so far: Oct 2026 closed
+// on a Sunday, so it isn't business-day adjusted). Only backfills reach them.
+export function samsungCycleDates(startDate, lastClose) {
     const cycles = ["9999-12-31"];
-    let [y, m] = today.split("-").map(Number);
-    const close = () => `${y}-${String(m).padStart(2, "0")}-${String(SAMSUNG_CLOSE_DAY).padStart(2, "0")}`;
+    if (!lastClose) return cycles;
+    let [y, m, day] = lastClose.split("-").map(Number);
+    const close = () => {
+        const d = Math.min(day, new Date(Date.UTC(y, m, 0)).getUTCDate());   // clamp e.g. the 31st in short months
+        return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    };
     const back = () => { if (--m === 0) { m = 12; y--; } };
-    if (close() > today) back();
     while (close() >= startDate) {
         cycles.push(close());
         back();

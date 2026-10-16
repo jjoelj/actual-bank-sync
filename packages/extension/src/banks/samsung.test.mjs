@@ -1,6 +1,6 @@
 // Run: node src/banks/samsung.test.mjs
 import assert from "node:assert";
-import { parseSamsungTransactions, parseMoney, samsungCycleDates } from "./samsung.js";
+import { parseSamsungTransactions, parseMoney, samsungCycleDates, parseCloseDate } from "./samsung.js";
 
 const tx = (id, type, value, date, merchant) => ({
     id,
@@ -28,11 +28,18 @@ assert.equal(parseMoney(null), null);
 
 console.log("samsung parse: OK");
 
-// Statement cycles (closes on the 11th): the window must reach back into every
-// cycle it overlaps, or a charge from just before a close is never fetched.
-assert.deepEqual(samsungCycleDates("2026-10-08", "2026-10-15"), ["9999-12-31", "2026-10-11"], "window spans the Oct 11 close");
-assert.deepEqual(samsungCycleDates("2026-10-12", "2026-10-15"), ["9999-12-31"], "window after the close: current cycle only");
-assert.deepEqual(samsungCycleDates("2026-10-11", "2026-10-15"), ["9999-12-31", "2026-10-11"], "closing day itself belongs to the closed cycle");
-assert.deepEqual(samsungCycleDates("2025-12-20", "2026-02-05"), ["9999-12-31", "2026-01-11"], "year wrap; Dec 11 close predates the window");
-assert.deepEqual(samsungCycleDates("2025-12-05", "2026-01-05"), ["9999-12-31", "2025-12-11"], "today before this month's close");
+// Statement cycles: the window must reach back into every cycle it overlaps,
+// or a charge from just before a close is never fetched.
+assert.deepEqual(samsungCycleDates("2026-10-08", "2026-10-11"), ["9999-12-31", "2026-10-11"], "window spans the Oct 11 close");
+assert.deepEqual(samsungCycleDates("2026-10-12", "2026-10-11"), ["9999-12-31"], "window after the close: current cycle only");
+assert.deepEqual(samsungCycleDates("2026-10-11", "2026-10-11"), ["9999-12-31", "2026-10-11"], "closing day itself belongs to the closed cycle");
+assert.deepEqual(samsungCycleDates("2025-12-20", "2026-01-11"), ["9999-12-31", "2026-01-11"], "year wrap; Dec 11 close predates the window");
+assert.deepEqual(samsungCycleDates("2025-11-01", "2026-01-11"), ["9999-12-31", "2026-01-11", "2025-12-11", "2025-11-11"], "backfill walks back monthly");
+assert.deepEqual(samsungCycleDates("2026-02-01", "2026-03-31"), ["9999-12-31", "2026-03-31", "2026-02-28"], "31st clamps in short months");
+assert.deepEqual(samsungCycleDates("2026-10-08", null), ["9999-12-31"], "no closing date: current cycle only");
+assert.equal(parseCloseDate("2026-10-11"), "2026-10-11");
+assert.equal(parseCloseDate("2026-10-11T00:00:00"), "2026-10-11");
+assert.equal(parseCloseDate("10/11/2026"), "2026-10-11");
+assert.equal(parseCloseDate("1/5/2026"), "2026-01-05");
+assert.equal(parseCloseDate(null), null);
 console.log("samsungCycleDates: OK");
