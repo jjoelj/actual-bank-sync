@@ -65,7 +65,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://account.venmo.com/*"],
+      "matches": ["https://account.venmo.com/*", "https://id.venmo.com/*"],
       "js": ["src/content/content-utils.js", "src/content/venmo.js"],
       "run_at": "document_idle"
     },

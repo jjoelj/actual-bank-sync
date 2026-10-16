@@ -6,3 +6,7 @@ onMessage("GET_VENMO_PROFILE_ID", () => {
     if (!profileId) throw new Error("profileId not in link");
     return { profileId };
 });
+
+// Sign-in page (id.venmo.com): auto-login and saving manual logins. With a
+// remembered email the password is on the first screen.
+registerLogin("venmo", "#password");

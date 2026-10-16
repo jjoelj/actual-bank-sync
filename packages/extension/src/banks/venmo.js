@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, parseCsvLine, toLocalDate, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, logBalanceDrift, applyActualStartingBalance, onTabClose, appTargets } from "../utils.js";
 import { syncVenmoGroups } from "./venmoGroups.js";
 
@@ -44,8 +45,6 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
     const tab = await openTabBackground("https://id.venmo.com/signin");
     if (needsCash) reportProgress(options, "venmo-cash", 15, "Opening Venmo…");
     if (needsCredit) reportProgress(options, "venmo-credit", 15, "Opening Venmo…");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     let venmoData;
     try {
@@ -197,7 +196,14 @@ function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
 
         const cleanup = () => chrome.tabs.onUpdated.removeListener(onTabUpdated);
 
+        let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
+        let loginAttempted = false;
+        let loginAt = 0;
+        let shownToUser = false;
+
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
             try {
@@ -206,6 +212,27 @@ function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
                 if (!tab.url?.includes("account.venmo.com")) {
                     dataPageStart = null;
                     clickedStatements = false;
+                    // Signing in on id.venmo.com: type the saved login once when
+                    // the password field shows (remembered email → first screen).
+                    // Come to the front 20s after that submit, or after 15s if no
+                    // password field ever showed (email screen, or a code check).
+                    if (!loginAttempted && tab.status === "complete" && tab.url?.includes("id.venmo.com")) {
+                        const [probe] = await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => !!document.querySelector("#password"),
+                        });
+                        if (probe?.result) {
+                            loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            loginAt = await autoLogin(tabId, "venmo") ? Date.now() : 0;
+                        }
+                    }
+                    const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000;
+                    if (!shownToUser && giveUp) {
+                        shownToUser = true;
+                        console.log("Venmo: waiting for login...");
+                        chrome.tabs.update(tabId, { active: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
+                    }
                     return;
                 }
 
@@ -263,6 +290,8 @@ function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
                 }
             } catch {
                 // Tab not ready yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
 
