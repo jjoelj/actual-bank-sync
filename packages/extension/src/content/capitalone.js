@@ -21,3 +21,6 @@ onMessage("FETCH_CAPITALONE_TRANSACTIONS", async ({ cardId, startDate, endDate }
     const data = await attemptFetch(3);
     return { data };
 });
+
+// Sign-in page (verified.capitalone.com): auto-login and saving manual logins.
+registerLogin("capitalone", "#pwInputField");

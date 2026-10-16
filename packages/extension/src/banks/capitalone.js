@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, subtractOneDay, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncCapitalOne(settings, accountMappings, options = {}) {
@@ -10,8 +11,6 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
     const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://myaccounts.capitalone.com/accountSummary");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
     activeKeys.forEach(k => reportProgress(options, k, 15, "Opening Capital One…"));
 
     let caponeAccounts;
@@ -85,12 +84,20 @@ export async function getCapitalOneAccountsForPopup() {
     }
 }
 
+// Off the account summary means signing in: the saved login is typed once when
+// the password field shows. The window comes up for a manual login (or an MFA
+// code) 20s after that submit, or after 15s if no password field ever appeared.
 function pollForCapitalOneAccounts(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
+        let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
         let shownToUser = false;
+        let loginAttempted = false;
+        let loginAt = 0;
 
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
@@ -104,7 +111,18 @@ function pollForCapitalOneAccounts(tabId, onTick) {
                 const tab = await chrome.tabs.get(tabId);
 
                 if (tab.url && !tab.url.includes("myaccounts.capitalone.com/accountSummary")) {
-                    if (!shownToUser) {
+                    if (!loginAttempted && tab.status === "complete" && tab.url.includes("verified.capitalone.com")) {
+                        const [probe] = await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => !!document.querySelector("#pwInputField"),
+                        });
+                        if (probe?.result) {
+                            loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            loginAt = await autoLogin(tabId, "capitalone") ? Date.now() : 0;
+                        }
+                    }
+                    const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000;
+                    if (!shownToUser && giveUp) {
                         shownToUser = true;
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });
@@ -123,6 +141,8 @@ function pollForCapitalOneAccounts(tabId, onTick) {
                 }
             } catch {
                 // Tab not ready or not logged in yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
 

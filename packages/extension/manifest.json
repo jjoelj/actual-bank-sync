@@ -24,6 +24,7 @@
     "https://*.venmo.com/*",
     "https://www.bilt.com/*",
     "https://myaccounts.capitalone.com/*",
+    "https://verified.capitalone.com/*",
     "https://login.fidelityrewards.com/*",
     "https://digital.fidelity.com/*",
     "https://api.usbank.com/*",
@@ -48,7 +49,7 @@
     {
       "matches": [
         "https://www.sofi.com/*", "https://login.sofi.com/*", "https://*.venmo.com/*",
-        "https://www.bilt.com/*", "https://myaccounts.capitalone.com/*",
+        "https://www.bilt.com/*", "https://myaccounts.capitalone.com/*", "https://verified.capitalone.com/*",
         "https://login.fidelityrewards.com/*", "https://digital.fidelity.com/*",
         "https://mytargetcirclecard.target.com/*", "https://onlinebanking.usbank.com/*",
         "https://*.wellsfargo.com/*", "https://www.barclaycardus.com/*", "https://cards.barclaycardus.com/*"
@@ -74,7 +75,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://myaccounts.capitalone.com/*"],
+      "matches": ["https://myaccounts.capitalone.com/*", "https://verified.capitalone.com/*"],
       "js": ["src/content/content-utils.js", "src/content/capitalone.js"],
       "run_at": "document_idle"
     },
