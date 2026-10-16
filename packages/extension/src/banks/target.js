@@ -25,8 +25,8 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
     try {
         let targetData;
         try {
-            targetData = await pollForTargetData(tab.id, (t) => {
-                reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+            targetData = await pollForTargetData(tab.id, (t, msg) => {
+                reportProgress(options, 15 + Math.round(t * 35), msg);
             });
         } catch (err) {
             console.warn("Target: login failed, giving up.");
@@ -99,12 +99,20 @@ function pollForTargetData(tabId, onTick) {
         let loginAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
+        let status = "Signing in…";
+        // Progress moves by sign-in step, never back; waiting on the user doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
+            status = msg;
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
+        };
 
         const interval = setInterval(async () => {
             if (busy) return;
             busy = true;
             const elapsed = Date.now() - start;
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
+            onTick?.(progress, status);
             try {
                 const tab = await chrome.tabs.get(tabId);
 
@@ -139,12 +147,14 @@ function pollForTargetData(tabId, onTick) {
                         });
                         if (probe?.result) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            say("Signing in with saved login…", 0.3);
                             loginAt = await autoLogin(tabId, "target", { submit: "space" }) ? Date.now() : 0;   // Enter doesn't submit this form
                         }
                     }
                     const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - dataPageStart > 15000;
                     if (!shownToUser && giveUp) {
                         shownToUser = true;
+                        say("Sign in in the Target window");
                         console.log("Target: waiting for login...");
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });

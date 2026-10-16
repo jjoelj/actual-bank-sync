@@ -44,7 +44,12 @@ function actualConfigured(settings) {
   return Boolean(settings.actualUrl && settings.actualPassword && settings.actualSyncId);
 }
 
+// Latest progress per account, so a popup opened mid-sync can show it.
+const liveProgress = new Map();
+
 function sendProgress(key, percent, message) {
+  if (message == null) liveProgress.delete(key);
+  else liveProgress.set(key, { percent, message });
   chrome.runtime.sendMessage({ type: "SYNC_PROGRESS", key, percent, message }).catch(() => {});
 }
 
@@ -61,6 +66,12 @@ chrome.runtime.onInstalled.addListener(() => {
   migrateAccountMappings().catch((err) => console.error("Mapping migration failed:", err));
   scheduleNextSyncAlarm().catch((err) => console.error("Failed to schedule sync alarm:", err));
   console.log("Bank Sync installed, alarm scheduled.");
+});
+
+// A sync missed while the computer or browser was off runs about a minute
+// after the browser starts (alarms aren't guaranteed to survive a restart).
+chrome.runtime.onStartup.addListener(() => {
+  scheduleNextSyncAlarm().catch((err) => console.error("Failed to schedule sync alarm:", err));
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -289,6 +300,7 @@ async function runSync(options = {}) {
 
   } finally {
     await chrome.storage.local.remove(["activeSyncSessionId", "activeSyncSummary"]);
+    liveProgress.clear();
     syncInProgress = false;
     await scheduleNextSyncAlarm();
     // Drain anything mapped while this sync was running (or queued meanwhile).
@@ -454,6 +466,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then((settings) => sendToHost("getAccounts", { settings }))
       .then((accounts) => sendResponse({ accounts }))
       .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (msg.type === "GET_SYNC_PROGRESS") {
+    sendResponse({ progress: Object.fromEntries(liveProgress) });
     return true;
   }
 

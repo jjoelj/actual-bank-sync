@@ -27,8 +27,9 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     try {
         let biltData;
         try {
-            biltData = await pollForBiltData(tab.id, (t) => {
-                reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+            // Waiting on the user; the bar holds until they're signed in.
+            biltData = await pollForBiltData(tab.id, () => {
+                reportProgress(options, 15, "Sign in in the BILT window");
             });
         } catch (err) {
             console.warn("Bilt: login failed, giving up.");

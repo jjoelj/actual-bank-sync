@@ -34,8 +34,8 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     try {
         let apolloState;
         try {
-            apolloState = await pollForApolloState(tab.id, (t) => {
-                activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 30), "Logging in…"));
+            apolloState = await pollForApolloState(tab.id, (t, msg) => {
+                activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 30), msg));
             });
         } catch (err) {
             console.warn("SoFi: login failed, giving up.", err.message);
@@ -299,6 +299,14 @@ function pollForApolloState(tabId, onTick) {
         const start = Date.now();
         let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
         let shownToUser = false;
+        let status = "Signing in…";
+        // Progress moves by sign-in step, never back; waiting on the user doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
+            status = msg;
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
+        };
         let loginAttempted = false;
         let loginAt = 0;
 
@@ -312,7 +320,7 @@ function pollForApolloState(tabId, onTick) {
                 reject(new Error("Timed out waiting for Apollo state"));
                 return;
             }
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
+            onTick?.(progress, status);
 
             try {
                 const tab = await chrome.tabs.get(tabId);
@@ -325,12 +333,14 @@ function pollForApolloState(tabId, onTick) {
                         });
                         if (probe?.result) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            say("Signing in with saved login…", 0.3);
                             loginAt = await autoLogin(tabId, "sofi") ? Date.now() : 0;
                         }
                     }
                     const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000;
                     if (!shownToUser && giveUp) {
                         shownToUser = true;
+                        say("Sign in in the SoFi window");
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                         console.log("SoFi: waiting for login...");

@@ -48,9 +48,9 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
 
     let venmoData;
     try {
-        venmoData = await pollForVenmoData(tab.id, { needsProfileId: needsCash, needsBearerToken: needsCredit || runGroups }, (t) => {
-            if (needsCash) reportProgress(options, "venmo-cash", 15 + Math.round(t * 35), "Logging in…");
-            if (needsCredit) reportProgress(options, "venmo-credit", 15 + Math.round(t * 35), "Logging in…");
+        venmoData = await pollForVenmoData(tab.id, { needsProfileId: needsCash, needsBearerToken: needsCredit || runGroups }, (t, msg) => {
+            if (needsCash) reportProgress(options, "venmo-cash", 15 + Math.round(t * 35), msg);
+            if (needsCredit) reportProgress(options, "venmo-credit", 15 + Math.round(t * 35), msg);
         });
     } catch (err) {
         console.warn("Venmo: login failed, giving up.");
@@ -200,12 +200,20 @@ function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
         let loginAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
+        let status = "Signing in…";
+        // Progress moves by sign-in step, never back; waiting on the user doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
+            status = msg;
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
+        };
 
         const interval = setInterval(async () => {
             if (busy) return;
             busy = true;
             const elapsed = Date.now() - start;
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
+            onTick?.(progress, status);
             try {
                 const tab = await chrome.tabs.get(tabId);
 
@@ -223,12 +231,14 @@ function pollForVenmoData(tabId, { needsProfileId, needsBearerToken }, onTick) {
                         });
                         if (probe?.result) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            say("Signing in with saved login…", 0.3);
                             loginAt = await autoLogin(tabId, "venmo") ? Date.now() : 0;
                         }
                     }
                     const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000;
                     if (!shownToUser && giveUp) {
                         shownToUser = true;
+                        say("Sign in in the Venmo window");
                         console.log("Venmo: waiting for login...");
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });

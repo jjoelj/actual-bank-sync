@@ -153,12 +153,19 @@ function pollForFidelityData(tabId, onTick) {
         let loginAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
+        let status = null;   // sign-in steps; the state labels take over after
+        // Progress moves by step, never back; waiting on the user doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
+            status = msg;
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
+        };
 
         const interval = setInterval(async () => {
             if (busy) return;
             busy = true;
-            const elapsed = Date.now() - start;
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), FIDELITY_STATE_LABELS[fidelityState]);
+            onTick?.(progress, status ?? FIDELITY_STATE_LABELS[fidelityState]);
             try {
                 const tab = await chrome.tabs.get(trackingTabId);
                 console.log("fidelity state:", fidelityState, "url:", tab.url, "status:", tab.status);
@@ -183,6 +190,7 @@ function pollForFidelityData(tabId, onTick) {
                 // login once; come to the front 20s after that submit, or after
                 // 15s there if no password field ever showed.
                 if (tab.url?.includes("digital.fidelity.com/prgw/")) {
+                    status ??= "Signing in…";
                     if (!loginAttempted) {
                         const [probe] = await chrome.scripting.executeScript({
                             target: { tabId: trackingTabId },
@@ -190,18 +198,22 @@ function pollForFidelityData(tabId, onTick) {
                         });
                         if (probe?.result) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            say("Signing in with saved login…", 0.3);
                             loginAt = await autoLogin(trackingTabId, "fidelity") ? Date.now() : 0;
                         }
                     }
                     const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - dataPageStart > 15000;
                     if (!shownToUser && giveUp) {
                         shownToUser = true;
+                        say("Sign in in the Fidelity window");
                         console.log("Fidelity: waiting for login...");
                         chrome.tabs.update(trackingTabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                     }
                     return;
                 }
+                status = null;   // signed in
+                progress = Math.max(progress, 0.5);
 
                 if (fidelityState === "click-card" && tab.url?.includes("digital.fidelity.com")) {
                     if (/#\d{4}/.test(tab.url)) {

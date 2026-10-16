@@ -29,8 +29,8 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
     try {
         let accountId;
         try {
-            accountId = await pollForSamsungData(tab.id, (t) => {
-                reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
+            accountId = await pollForSamsungData(tab.id, (t, msg) => {
+                reportProgress(options, 15 + Math.round(t * 35), msg);
             });
         } catch (err) {
             console.warn("Samsung: login failed, giving up.", err.message);
@@ -112,6 +112,14 @@ function pollForSamsungData(tabId, onTick) {
         let loginAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
+        let status = "Signing in…";
+        // Progress moves by sign-in step, never back; waiting on the user doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
+            status = msg;
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
+        };
         let navigatedToActivity = false;
         let cardsSettleTicks = 0;
 
@@ -119,7 +127,7 @@ function pollForSamsungData(tabId, onTick) {
             if (busy) return;
             busy = true;
             const elapsed = Date.now() - start;
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
+            onTick?.(progress, status);
             try {
                 const tab = await chrome.tabs.get(tabId);
                 if (!tab.url?.includes("barclaycardus.com")) { dataPageStart = null; return; }
@@ -163,12 +171,14 @@ function pollForSamsungData(tabId, onTick) {
                     if (!loginAttempted) {
                         loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
                         // The 20s grace starts after submit (autoLogin can wait ~15s for the form).
+                        say("Signing in with saved login…", 0.3);
                         loginAt = await autoLogin(tabId, "samsung") ? Date.now() : 0;   // 0 → show the tab now
                     }
                     // Still on the login form 20s after auto-login (or nothing saved):
                     // hand it to the user once.
                     if (loginAttempted && !shownToUser && Date.now() - loginAt > 20000) {
                         shownToUser = true;
+                        say("Sign in in the Samsung window");
                         console.warn("Samsung: auto-login unavailable or failed; waiting for manual login.");
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });

@@ -141,6 +141,8 @@ async function init() {
   updateDropdownOptions();
   updateUsedOptions();
   sortAccountRows();
+  const { activeSyncSessionId } = await chrome.storage.local.get("activeSyncSessionId");
+  if (activeSyncSessionId) await showSyncRunning();
   await renderSyncStatus();
   await renderSyncSummary();
   updateSyncBtn();
@@ -1304,7 +1306,7 @@ function loadedStatus(app, dropped) {
   // No accounts at all: mappings are left alone (nothing to remap to), so say so
   // rather than "Ready to sync." over a dropdown with nothing in it.
   if (!accountsFor(app).length) return [`${APP_LABELS[app]} returned no accounts — check that it's pointed at the right budget.`, "error"];
-  if (!dropped.length) return ["Ready to sync.", "ok"];
+  if (!dropped.length) return syncRunning ? ["Sync in progress…", ""] : ["Ready to sync.", "ok"];
   const names = dropped.map(k => document.querySelector(`.account-row[data-row-key="${k}"]`)?.dataset.sourceLabel || k);
   return [`${APP_LABELS[app]} accounts changed — cleared ${dropped.length} mapping${dropped.length === 1 ? "" : "s"} (${names.join(", ")}). Remap below.`, "error"];
 }
@@ -2171,6 +2173,25 @@ function startSyncCooldown() {
   cooldownTimer = setInterval(tick, 1000);
 }
 
+// A sync is running (started here, by the schedule, or before this popup
+// opened): show each account's progress so far and hold the button.
+let syncRunning = false;
+async function showSyncRunning() {
+  syncRunning = true;
+  const { progress = {} } = await sendMessage({ type: "GET_SYNC_PROGRESS" }).catch(() => ({}));
+  for (const [key, p] of Object.entries(progress)) activeProgress.set(key, p);
+  showStatus("Sync in progress…", "");
+  $("sync-btn").disabled = true;
+  $("sync-btn").textContent = "Syncing…";
+}
+
+function showSyncDone() {
+  syncRunning = false;
+  if (cooldownTimer) return;   // a popup-started sync's cooldown owns the button
+  $("sync-btn").disabled = false;
+  $("sync-btn").textContent = "Sync Now";
+}
+
 async function runSyncFromPopup(options, pendingMessage) {
   const syncBtn = $("sync-btn");
   syncBtn.disabled = true;
@@ -2230,6 +2251,11 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+
+  if (changes.activeSyncSessionId) {
+    if (changes.activeSyncSessionId.newValue) await showSyncRunning();
+    else showSyncDone();
+  }
 
   if (changes.pendingCategoryTxns || changes.categoryMappings) {
     await updateCategoriesBadge();

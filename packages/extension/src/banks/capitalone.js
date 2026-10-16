@@ -15,8 +15,8 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
 
     let caponeAccounts;
     try {
-        caponeAccounts = await pollForCapitalOneAccounts(tab.id, (t) => {
-            activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 35), "Logging in…"));
+        caponeAccounts = await pollForCapitalOneAccounts(tab.id, (t, msg) => {
+            activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 35), msg));
         });
     } catch (err) {
         console.warn("Capital One: login failed, giving up.", err.message);
@@ -92,6 +92,14 @@ function pollForCapitalOneAccounts(tabId, onTick) {
         const start = Date.now();
         let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
         let shownToUser = false;
+        let status = "Signing in…";
+        // Progress moves by sign-in step, never back; waiting on the user doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
+            status = msg;
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
+        };
         let loginAttempted = false;
         let loginAt = 0;
 
@@ -105,7 +113,7 @@ function pollForCapitalOneAccounts(tabId, onTick) {
                 reject(new Error("Timed out waiting for Capital One accounts"));
                 return;
             }
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
+            onTick?.(progress, status);
 
             try {
                 const tab = await chrome.tabs.get(tabId);
@@ -118,12 +126,14 @@ function pollForCapitalOneAccounts(tabId, onTick) {
                         });
                         if (probe?.result) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            say("Signing in with saved login…", 0.3);
                             loginAt = await autoLogin(tabId, "capitalone") ? Date.now() : 0;
                         }
                     }
                     const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000;
                     if (!shownToUser && giveUp) {
                         shownToUser = true;
+                        say("Sign in in the Capital One window");
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                         console.log("Capital One: waiting for login...");
