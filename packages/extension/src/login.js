@@ -89,28 +89,28 @@ export async function waitForNavigation(tabId) {
 // matches sendButtonText, if given), reads the code off Google Messages
 // (a conversation mentioning `from`), types it into codeBox and presses Enter,
 // all with trusted input. Resolves false on any failure; the caller then
-// shows the window so the user can finish. say(msg) reports each step.
+// shows the window so the user can finish. say(msg, frac) reports each step.
 export async function enterTextedCode(tabId, bank, { from, sendButton, sendButtonText, codeBox }, say = () => {}) {
     let sms;
     try {
         console.log(`${bank}: reading Google Messages before asking for the code`);
-        say("Checking Google Messages…");
+        say("Checking Google Messages…", 0.3);
         // Before the text is sent. A failed read still asks for the text, so
         // the user only has to type the code.
         sms = await watchForCode(from).catch(err => err);
         console.log(`${bank}: asking for the code by text`);
-        say("Asking for a texted code…");
+        say("Asking for a texted code…", 0.4);
         await withDebugger(tabId, async send => {
             await focusWhenReady(tabId, sendButton, sendButtonText);
             await jitter(150, 300);
             await pressKey(send, SPACE);
         });
         if (sms instanceof Error) throw sms;
-        say("Waiting for the texted code…");
+        say("Waiting for the texted code…", 0.5);
         const code = await sms.wait();
         await sms.release();
         console.log(`${bank}: got the texted code; entering it`);
-        say("Entering the texted code…");
+        say("Entering the texted code…", 0.7);
         await withDebugger(tabId, async send => {
             await focusWhenReady(tabId, codeBox);
             await jitter(200, 500);

@@ -162,9 +162,13 @@ function pollForUSBankData(tabId, onTick) {
         let loginAt = 0;
         let shownToUser = false;
         let status = "Signing in…";
-        const say = msg => {
+        // Progress moves by sign-in step (frac), never back; waiting on the
+        // user or a text doesn't advance it.
+        let progress = 0;
+        const say = (msg, frac) => {
             status = msg;
-            onTick?.(Math.min((Date.now() - start) / POLL_TIMEOUT_MS, 0.99), msg);
+            if (frac != null) progress = Math.max(progress, frac);
+            onTick?.(progress, msg);
         };
 
         const interval = setInterval(async () => {
@@ -177,7 +181,7 @@ function pollForUSBankData(tabId, onTick) {
                 reject(new Error("Timed out waiting for US Bank data"));
                 return;
             }
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), status);
+            onTick?.(progress, status);
 
             try {
                 const tab = await chrome.tabs.get(tabId);
@@ -195,14 +199,14 @@ function pollForUSBankData(tabId, onTick) {
                     const { password, codeScreen } = probe?.result || {};
                     if (password && !loginAttempted) {
                         loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
-                        say("Signing in with saved login…");
+                        say("Signing in with saved login…", 0.1);
                         loginAt = await autoLogin(tabId, "usbank") ? Date.now() : 0;
                     }
                     if (codeScreen && !codeAttempted) {
                         codeAttempted = true;
                         if (await enterTextedCode(tabId, "US Bank", USBANK_CODE, say)) {
                             start = loginAt = Date.now();   // waiting on the text doesn't count toward the timeout
-                            say("Finishing sign-in…");
+                            say("Finishing sign-in…", 0.85);
                             return;
                         }
                     }
