@@ -241,6 +241,10 @@ function pollForFidelityData(tabId, onTick) {
                         });
                         chrome.tabs.onUpdated.addListener(function ssoListener(updatedTabId, changeInfo) {
                             if (!changeInfo.url?.includes("fidelityrewards.com")) return;
+                            // The hand-off can pass through newSSO with an empty
+                            // token (ssoToken=&ssoPayload={}) before the real one;
+                            // following that leaves the page blank.
+                            if (changeInfo.url.includes("/newSSO") && !/[?&]ssoToken=[^&]/.test(changeInfo.url)) return;
                             chrome.tabs.onUpdated.removeListener(ssoListener);
                             fidelityState = "get-data";
                             const url = changeInfo.url;
