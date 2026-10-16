@@ -60,7 +60,7 @@
       "world": "MAIN"
     },
     {
-      "matches": ["https://www.sofi.com/my/banking/*"],
+      "matches": ["https://www.sofi.com/my/banking/*", "https://login.sofi.com/*"],
       "js": ["src/content/content-utils.js", "src/content/sofi.js"],
       "run_at": "document_idle"
     },

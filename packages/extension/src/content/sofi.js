@@ -139,3 +139,6 @@ function fetchBalance(accountId) {
 
     throw new Error(`Account ${accountId} not found in Apollo state`);
 }
+
+// Sign-in page (login.sofi.com): auto-login and saving manual logins.
+registerLogin("sofi", "#password");

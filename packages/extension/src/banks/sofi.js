@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { APPS, getDateChunks, getSyncPlan, refreshLastTxDates, pacificDate, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncSoFi(settings, accountMappings, options = {}) {
@@ -290,12 +291,20 @@ function parseSoFiCreditCsv(csv) {
     return transactions;
 }
 
+// Redirected off the banking pages means signing in (login.sofi.com): the
+// saved login is typed once when the password field shows. The window comes up
+// 20s after that submit, or after 15s if no password field ever appeared.
 function pollForApolloState(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
+        let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
         let shownToUser = false;
+        let loginAttempted = false;
+        let loginAt = 0;
 
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
@@ -308,9 +317,19 @@ function pollForApolloState(tabId, onTick) {
             try {
                 const tab = await chrome.tabs.get(tabId);
 
-                // If redirected away from banking page, show tab to user and keep waiting
                 if (tab.url && !tab.url.includes("sofi.com/my/banking")) {
-                    if (!shownToUser) {
+                    if (!loginAttempted && tab.status === "complete" && tab.url.includes("login.sofi.com")) {
+                        const [probe] = await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => !!document.querySelector("#password"),
+                        });
+                        if (probe?.result) {
+                            loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            loginAt = await autoLogin(tabId, "sofi") ? Date.now() : 0;
+                        }
+                    }
+                    const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000;
+                    if (!shownToUser && giveUp) {
                         shownToUser = true;
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });
@@ -344,6 +363,8 @@ function pollForApolloState(tabId, onTick) {
                 }
             } catch {
                 // Tab not ready yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
 
