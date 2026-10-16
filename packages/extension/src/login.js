@@ -30,6 +30,10 @@ export async function autoLogin(tabId, bank, { submit = "enter" } = {}) {
     try {
         // The sync tab is in the background; make it behave as focused so it accepts input.
         await send("Emulation.setFocusEmulationEnabled", { enabled: true });
+        // A window created minimized has no real size, so responsive pages lay
+        // out narrow and can hide the sign-in box (Wells Fargo's homepage).
+        // Lay out at desktop size while signing in; cleared on detach.
+        await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 0, mobile: false });
 
         // The content script waits for the field to be usable before focusing.
         // No username field (or a remembered one) → just the password.
