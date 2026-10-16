@@ -42,18 +42,6 @@ function sureIsTransfer(tx) {
   return Boolean(tx.transfer) || tx.classification === "transfer";
 }
 
-// Group normalized rows by fingerprint so duplicates (genuinely identical
-// same-day rows) are paired 1:1 rather than collapsed.
-function groupByKey(rows) {
-  const byKey = new Map();
-  for (const row of rows) {
-    const list = byKey.get(row.key);
-    if (list) list.push(row);
-    else byKey.set(row.key, [row]);
-  }
-  return byKey;
-}
-
 // Diagnostic: when rows go unmatched, find how many WOULD match if we relaxed
 // one field at a time — this points straight at the culprit (a broken amount, a
 // renamed payee, a shifted date) instead of leaving every row looking unique.
@@ -78,43 +66,59 @@ function diagnoseUnmatched(label, sureLeft, actualLeft, sureAll, actualAll) {
   }
 }
 
-function compareAccount(sureRows, actualRows) {
-  const sureByKey = groupByKey(sureRows);
-  const actualByKey = groupByKey(actualRows);
-
+export function compareAccount(sureRows, actualRows) {
   const mismatches = [];
-  const missingInActual = []; // in Sure, not Actual
-  const missingInSure = [];   // in Actual, not Sure
   let matched = 0;
+  let sureLeft = sureRows;
+  let actualLeft = actualRows;
 
-  for (const key of new Set([...sureByKey.keys(), ...actualByKey.keys()])) {
-    const s = sureByKey.get(key) || [];
-    const a = actualByKey.get(key) || [];
-    const paired = Math.min(s.length, a.length);
-    matched += paired;
-
-    for (let i = 0; i < paired; i++) {
-      if (normCategory(s[i].category) !== normCategory(a[i].category)) {
-        mismatches.push({
-          key: s[i].key,
-          date: s[i].date,
-          amount: s[i].amount,
-          payee: s[i].payee || a[i].payee,
-          sureCategory: normCategory(s[i].category),
-          actualCategory: normCategory(a[i].category),
-          sureId: s[i].id,
-          actualId: a[i].id,
-        });
-      }
+  const recordPair = (s, a) => {
+    matched++;
+    if (normCategory(s.category) !== normCategory(a.category)) {
+      mismatches.push({
+        key: s.key,
+        date: s.date,
+        amount: s.amount,
+        payee: s.payee || a.payee,
+        sureCategory: normCategory(s.category),
+        actualCategory: normCategory(a.category),
+        sureId: s.id,
+        actualId: a.id,
+      });
     }
-    for (let i = paired; i < s.length; i++) missingInActual.push(s[i]);
-    for (let i = paired; i < a.length; i++) missingInSure.push(a[i]);
-  }
+  };
+
+  // Pair in two passes. Pass 1 uses the exact fingerprint (date|amount|payee).
+  // Pass 2 relaxes to date|amount so the SAME transaction still pairs when the
+  // apps store the payee differently — Sure keeps the raw ALL-CAPS bank
+  // description, Actual title-cases/normalizes it via its own rules, so a
+  // payee-based key alone leaves both showing as one-sided. Only rows that
+  // survive both passes are genuinely one-sided.
+  const pass = (keyOf) => {
+    const actualByKey = new Map();
+    for (const a of actualLeft) {
+      const k = keyOf(a);
+      const list = actualByKey.get(k);
+      if (list) list.push(a); else actualByKey.set(k, [a]);
+    }
+    const remainingSure = [];
+    for (const s of sureLeft) {
+      const list = actualByKey.get(keyOf(s));
+      const a = list && list.length ? list.shift() : null;
+      if (a) recordPair(s, a); else remainingSure.push(s);
+    }
+    sureLeft = remainingSure;
+    actualLeft = [];
+    for (const list of actualByKey.values()) actualLeft.push(...list);
+  };
+
+  pass((r) => r.key);                    // exact date|amount|payee
+  pass((r) => `${r.date}|${r.amount}`);  // date|amount (rescues payee-divergent pairs)
 
   const byDateDesc = (x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : 0);
   mismatches.sort(byDateDesc);
-  missingInActual.sort(byDateDesc);
-  missingInSure.sort(byDateDesc);
+  const missingInActual = sureLeft.sort(byDateDesc); // in Sure, not Actual
+  const missingInSure = actualLeft.sort(byDateDesc); // in Actual, not Sure
   return { matched, mismatches, missingInActual, missingInSure };
 }
 
