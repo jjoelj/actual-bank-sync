@@ -512,6 +512,7 @@ header {
 
 /* ── Settings view ── */
 .field-group { margin-bottom: 10px; }
+.field-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
 
 .field-label {
   display: block;
@@ -703,13 +704,12 @@ input[readonly]{ color: var(--text-dim); cursor: not-allowed; }
 }
 
 .summary-next-alarm {
-  font-size: 10px;
-  color: var(--text-dim);
-  line-height: 1.1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.2;
 }
+
+.summary-next-alarm:empty { display: none; }
 
 /* ── Account list ── */
 #accounts-list {

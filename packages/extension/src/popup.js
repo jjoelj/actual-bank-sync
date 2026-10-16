@@ -92,6 +92,9 @@ async function init() {
   if (settings.actualSyncId)       $("actual-sync-id").value       = settings.actualSyncId;
   if (settings.actualFilePassword) $("actual-file-password").value = settings.actualFilePassword;
 
+  const { autoSyncTime } = await chrome.storage.sync.get("autoSyncTime");
+  if (autoSyncTime) $("auto-sync-time").value = autoSyncTime;
+
   sureConfigured = Boolean(settings.sureApiKey && settings.sureUrl);
   actualConfigured = Boolean(settings.actualUrl && settings.actualPassword && settings.actualSyncId);
 
@@ -1334,6 +1337,12 @@ $("sync-btn").addEventListener("click", async () => {
   await runSyncFromPopup({}, "Syncing…");
 });
 
+// The background reschedules when this changes.
+$("auto-sync-time").addEventListener("change", async () => {
+  const value = $("auto-sync-time").value;
+  if (value) await chrome.storage.sync.set({ autoSyncTime: value });
+});
+
 $("sync-from-date").addEventListener("change", async () => {
   await chrome.storage.local.set({ syncFromDate: $("sync-from-date").value });
   updateSyncBtn();
@@ -2251,6 +2260,9 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+
+  // Rescheduled after a sync's done message, so follow the stored time itself.
+  if (changes.nextScheduledSyncAt) renderSyncSummary();
 
   if (changes.activeSyncSessionId) {
     if (changes.activeSyncSessionId.newValue) await showSyncRunning();

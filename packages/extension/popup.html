@@ -38,8 +38,8 @@
     <div class="summary-secondary">
       <div id="summary-accounts" class="summary-pill"></div>
       <div id="summary-transactions" class="summary-stat" style="display:none"></div>
-      <div id="summary-next-alarm" class="summary-next-alarm"></div>
     </div>
+    <div id="summary-next-alarm" class="summary-next-alarm"></div>
   </div>
 
   <div id="sync-from-section" style="display:none">
@@ -156,6 +156,15 @@
         <button id="save-settings-btn" class="btn">Save Settings</button>
       </div>
     </div>
+  </div>
+
+  <div class="settings-section">
+    <div class="settings-section-title">Auto sync</div>
+    <div class="field-group">
+      <span class="field-label">Daily at</span>
+      <input id="auto-sync-time" type="time" value="12:00" />
+    </div>
+    <p class="field-note">If a sync is missed (computer or browser off) or doesn't succeed, it runs about a minute after the browser next starts. With no internet, it checks again every 30 minutes.</p>
   </div>
 
   <div class="settings-danger">

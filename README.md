@@ -100,7 +100,7 @@ Set a **start date** for any accounts that haven't been synced before.
 
 ### 6. Sync
 
-Click **Sync Now** to run immediately, or let it run automatically once a day while the browser is running.
+Click **Sync Now** to run immediately, or let it run automatically once a day while the browser is running (at noon, or the time set under **Settings → Auto sync**).
 
 To keep scheduled syncs running when no browser window is open, turn on
 **Continue running background extensions and apps when … is closed**
@@ -188,7 +188,7 @@ await chrome.storage.local.set({ savedLogins });
 
 ## How it works
 
-1. A daily alarm fires while the browser is running (around noon the day after the last sync), or at its next start if it was missed (or run **Sync Now** manually)
+1. A daily alarm fires at the auto-sync time while the browser is running. A sync that was missed or didn't succeed runs about a minute after the browser next starts, and with no internet it checks again every 30 minutes (or run **Sync Now** manually)
 2. For each mapped account, the background script opens the bank's page in a minimized window, signs in with the saved login if needed, and downloads transactions (from the account's last-transaction watermark to today)
 3. Transactions are delivered to every app the account is mapped to:
    - **Actual** — via the native messaging host (a local Node.js process) using `@actual-app/api`; deduplicated by `imported_id`, and an account's first sync also imports a synthetic **Starting Balance** transaction so its balance matches the bank

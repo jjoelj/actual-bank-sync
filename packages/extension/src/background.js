@@ -25,8 +25,9 @@ const SINGLE_ACCOUNT_SYNC = {
 };
 
 const ALARM_NAME = "scheduled-sync";
-const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;   // daily
+const DEFAULT_SYNC_TIME = "12:00";   // daily; the user can change it (autoSyncTime)
 const MIN_ALARM_DELAY_MS = 60 * 1000;
+const OFFLINE_RETRY_MS = 30 * 60 * 1000;
 
 // ── App configuration ────────────────────────────────────────────────────────
 
@@ -71,18 +72,26 @@ chrome.runtime.onInstalled.addListener(() => {
 // A sync missed while the computer or browser was off runs about a minute
 // after the browser starts (alarms aren't guaranteed to survive a restart).
 chrome.runtime.onStartup.addListener(() => {
-  scheduleNextSyncAlarm().catch((err) => console.error("Failed to schedule sync alarm:", err));
+  scheduleNextSyncAlarm({ atStartup: true }).catch((err) => console.error("Failed to schedule sync alarm:", err));
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === ALARM_NAME) {
-    runSync().catch((err) => console.error("Sync failed:", err));
+// No internet → don't open bank windows that can't load; check again later.
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== ALARM_NAME) return;
+  if (!(await isOnline())) {
+    console.warn("Auto sync: no internet; checking again in 30 minutes.");
+    await setSyncAlarm(Date.now() + OFFLINE_RETRY_MS);
+    return;
   }
+  runSync().catch((err) => console.error("Sync failed:", err));
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local" || syncInProgress) return;
-  if (!changes.accountMappings && !changes.lastSyncDates && !changes.syncFromDate) return;
+  if (syncInProgress) return;
+  const relevant = areaName === "local"
+    ? changes.accountMappings || changes.lastSyncDates || changes.syncFromDate
+    : areaName === "sync" && changes.autoSyncTime;
+  if (!relevant) return;
   scheduleNextSyncAlarm().catch((err) => console.error("Failed to reschedule sync alarm:", err));
 });
 
@@ -623,7 +632,11 @@ function getSyncOptionsForKeys(options, keys, onProgress) {
   return { onProgress };
 }
 
-async function scheduleNextSyncAlarm() {
+// Daily at the chosen time, whether or not the last sync worked, so a failing
+// bank never retries in a loop. At browser start, an overdue account (missed
+// while the computer or browser was off, or its last sync failed) syncs about
+// a minute later instead.
+async function scheduleNextSyncAlarm({ atStartup = false } = {}) {
   const { accountMappings = {}, lastSyncDates = {}, syncFromDate } = await chrome.storage.local.get([
     "accountMappings",
     "lastSyncDates",
@@ -637,19 +650,38 @@ async function scheduleNextSyncAlarm() {
     return;
   }
 
-  const candidateTimes = mappedKeys
-    .map((key) => lastSyncDates[key] || syncFromDate)
-    .filter(Boolean)
-    .map((isoStr) => new Date(`${isoStr}T12:00:00`).getTime() + SYNC_INTERVAL_MS);
-
-  if (!candidateTimes.length) {
+  const lastDates = mappedKeys.map((key) => lastSyncDates[key] || syncFromDate).filter(Boolean);
+  if (!lastDates.length) {
     await chrome.alarms.clear(ALARM_NAME);
     await chrome.storage.local.set({ nextScheduledSyncAt: null });
     return;
   }
 
-  const nextWhen = Math.max(Math.min(...candidateTimes), Date.now() + MIN_ALARM_DELAY_MS);
-  await chrome.alarms.clear(ALARM_NAME);
-  chrome.alarms.create(ALARM_NAME, { when: nextWhen });
-  await chrome.storage.local.set({ nextScheduledSyncAt: nextWhen });
+  const { autoSyncTime = DEFAULT_SYNC_TIME } = await chrome.storage.sync.get("autoSyncTime");
+  const [hour, minute] = autoSyncTime.split(":").map(Number);
+  // The sync time on the given local date, plus `days`.
+  const syncTimeOn = (date, days = 0) => {
+    const d = new Date(date);
+    d.setDate(d.getDate() + days);
+    d.setHours(hour, minute, 0, 0);
+    return d.getTime();
+  };
+
+  const now = Date.now();
+  const overdue = lastDates.some((iso) => syncTimeOn(`${iso}T00:00:00`, 1) <= now);
+  const todays = syncTimeOn(now);
+  const nextWhen = atStartup && overdue ? now + MIN_ALARM_DELAY_MS
+    : todays > now ? todays : syncTimeOn(now, 1);
+  await setSyncAlarm(nextWhen);
 }
+
+async function setSyncAlarm(when) {
+  await chrome.alarms.clear(ALARM_NAME);
+  chrome.alarms.create(ALARM_NAME, { when });
+  await chrome.storage.local.set({ nextScheduledSyncAt: when });
+}
+
+// navigator.onLine only knows about a network adapter, not the internet, so
+// make a real (tiny, no-content) request. Any answer at all means online.
+const isOnline = () => fetch("https://www.gstatic.com/generate_204", { mode: "no-cors", cache: "no-store", signal: AbortSignal.timeout(10000) })
+  .then(() => true, () => false);
