@@ -1,7 +1,8 @@
 import * as actual from "@actual-app/api";
-import { mkdirSync, readdirSync, rmSync } from "fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { createRequire } from "module";
 
 // loot-core logs breadcrumbs and sync chatter via console.* — which defaults to
 // stdout, the same channel the parent reads the JSON result from. Route every
@@ -86,15 +87,26 @@ try {
         result = {ok: true};
     } else {
         const dlOpts = { password: settings.actualFilePassword || undefined };
-        try {
+        // downloadBudget resolves even when the budget did NOT open: its
+        // local-cache branch ignores load-budget's error, and the sync it runs
+        // next returns [] (no error) when nothing is loaded. Every later call
+        // then dies with a bare "No budget file is open". Probe a guarded call
+        // so that silent failure surfaces here, where we can recover from it.
+        const openBudget = async () => {
             await actual.downloadBudget(settings.actualSyncId, dlOpts);
+            await actual.getBudgetMonths();
+        };
+        const NOT_OPEN = /No budget file is open/i;
+        try {
+            await openBudget();
         } catch (err) {
             // Recover by releasing the db, wiping the local cache, and
             // re-downloading a clean copy from the server. This applies to
-            // loot-core's message-less key-test failures AND to an out-of-sync
-            // SyncError (the local cached budget diverged) — both are fixed by
-            // discarding the local copy. Anything else is a real error.
-            const recoverable = !err?.message || err?.reason === "out-of-sync" || /out-of-sync/i.test(err.message);
+            // loot-core's message-less key-test failures, to an out-of-sync
+            // SyncError (the local cached budget diverged), and to a cached
+            // budget that won't open — all are fixed by discarding the local
+            // copy. Anything else is a real error.
+            const recoverable = !err?.message || err?.reason === "out-of-sync" || /out-of-sync/i.test(err.message) || NOT_OPEN.test(err.message);
             if (!recoverable) throw err;
             await actual.shutdown();
             for (const entry of readdirSync(dataDir)) {
@@ -102,9 +114,13 @@ try {
             }
             await actual.init({ serverURL: settings.actualUrl, password: settings.actualPassword, dataDir });
             try {
-                await actual.downloadBudget(settings.actualSyncId, dlOpts);
+                await openBudget();
             } catch (retryErr) {
                 if (!retryErr?.message) throw new Error("Could not open budget — sync or decryption failed after cache reset. Check the Sync ID and File Password in settings.");
+                // A freshly downloaded budget that still won't open is not a
+                // stale cache: the file carries db migrations this host's
+                // @actual-app/api doesn't have (Actual server upgraded past it).
+                if (NOT_OPEN.test(retryErr.message)) throw new Error(`Budget downloaded but wouldn't open. Your Actual server is likely newer than this host's @actual-app/api (${apiVersion()}) — update the host with 'npm install @actual-app/api@latest -w actual-bank-sync-host'.`);
                 throw retryErr;
             }
         }
@@ -222,6 +238,17 @@ try {
 // before exit so the result line is never truncated.
 function finish(payload, code) {
     process.stdout.write(RESULT_MARKER + JSON.stringify(payload) + "\n", () => process.exit(code ?? 0));
+}
+
+// The api's exports map doesn't expose its package.json, so resolve the entry
+// point and step up out of dist/ to read the version.
+function apiVersion() {
+    try {
+        const entry = createRequire(import.meta.url).resolve("@actual-app/api");
+        return JSON.parse(readFileSync(join(entry, "..", "..", "package.json"), "utf8")).version;
+    } catch {
+        return "the installed version";
+    }
 }
 
 // loot-core throws a mix of Errors, Error subclasses with extra fields
