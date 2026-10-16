@@ -1,8 +1,10 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, pacificDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 // Samsung Galaxy Card is serviced by Barclays (barclaycardus.com). No 2FA on
-// that portal. When a login is needed the content script injects an autofillable
-// login overlay (Barclays' own password field won't autofill); nothing is stored.
+// that portal. When a login is needed the saved (DPAPI-encrypted) login is
+// submitted in the background; with none saved, or if it fails, the tab comes to
+// the front for a manual login, which the content script saves for next time.
 export async function syncSamsung(settings, accountMappings, accountKey, options = {}) {
     console.log("Samsung: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
@@ -20,8 +22,6 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
     if (!mapped) return;
 
     const tab = await openTabBackground("https://cards.barclaycardus.com/");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { focused: true });
 
     let transactions;
     let balance = null;
@@ -93,6 +93,8 @@ function pollForSamsungData(tabId, onTick) {
         let dataPageStart = null;
         let busy = false;
         let loginAttempted = false;
+        let loginAt = 0;
+        let shownToUser = false;
         let navigatedToActivity = false;
         let cardsSettleTicks = 0;
 
@@ -115,7 +117,9 @@ function pollForSamsungData(tabId, onTick) {
                 if (tab.status !== "complete") return;
 
                 const probe = await chrome.scripting.executeScript({
-                    target: { tabId },
+                    // All frames: the login form is in a cross-origin iframe
+                    // (www.barclaycardus.com/servicing/authenticate inside cards.).
+                    target: { tabId, allFrames: true },
                     world: "MAIN",
                     func: () => ({
                         // Barclays' password field is type="text" + a CSS mask, so
@@ -126,7 +130,9 @@ function pollForSamsungData(tabId, onTick) {
                             .find(Boolean) || null,
                     }),
                 });
-                const { hasPassword, accountId } = probe?.[0]?.result || {};
+                const results = (probe || []).map(r => r.result || {});
+                const hasPassword = results.some(r => r.hasPassword);
+                const accountId = results.find(r => r.accountId)?.accountId;
 
                 if (accountId) {
                     clearInterval(interval);
@@ -138,15 +144,17 @@ function pollForSamsungData(tabId, onTick) {
                 if (hasPassword) {
                     cardsSettleTicks = 0;   // still on the login form; don't count toward the fallback
                     if (!loginAttempted) {
-                        loginAttempted = true;   // prevents a second overlay while awaiting
-                        // Ask the content script to inject the autofillable overlay
-                        // (it also auto-injects on its own). It only fills the real
-                        // fields; the user submits Barclays' login themselves.
-                        try {
-                            await chrome.tabs.sendMessage(tabId, { type: "SAMSUNG_LOGIN" });
-                        } catch {
-                            loginAttempted = false;   // content script not ready; retry next tick
-                        }
+                        loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                        // The 20s grace starts after submit (autoLogin can wait ~15s for the form).
+                        loginAt = await autoLogin(tabId, "samsung") ? Date.now() : 0;   // 0 → show the tab now
+                    }
+                    // Still on the login form 20s after auto-login (or nothing saved):
+                    // hand it to the user once.
+                    if (loginAttempted && !shownToUser && Date.now() - loginAt > 20000) {
+                        shownToUser = true;
+                        console.warn("Samsung: auto-login unavailable or failed; waiting for manual login.");
+                        chrome.tabs.update(tabId, { active: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                     }
                     return;
                 }

@@ -22,31 +22,21 @@ onMessage("FETCH_SAMSUNG_BALANCE", () =>
         .then(d => ({ balance: d?.balance }))
 );
 
-// Barclays' password field is type="text" with a CSS masking trick specifically
-// so it won't autofill. Match it by id/name/data-auto (not type) and turn it back
-// into a real password input, so the password manager fills Barclays' own field
-// directly. The login lives in an iframe (all_frames injects us there too), so an
-// injected overlay would get clipped — converting the field avoids UI entirely.
+// Barclays' password field is type="text" with a CSS mask, so match it by
+// id/name/data-auto, not type. The login lives in an iframe (all_frames injects
+// us there too); only the frame that has the field acts.
 const PW_SEL = '#password, input[name="uxLoginForm.password"], input[data-auto="pass-word"]';
 
-let converted = false;
+registerLogin("samsung", PW_SEL);
+
+// The CSS-masked text field also blocks Edge's password autofill; turn it back
+// into a real password input so manual logins can autofill.
 function enablePasswordAutofill() {
-    if (converted) return;
     const el = document.querySelector(PW_SEL);
-    if (!el) return;
+    if (!el || el.type === "password") return;
     el.type = "password";
     el.classList.remove("text-security-marker", "text-security-disc");
     el.setAttribute("autocomplete", "current-password");
-    converted = true;
-    console.log("[bank-sync] enabled autofill on Barclays password field");
 }
-
-// Triggered during an extension-driven sync; also runs on its own below so a
-// manual login gets the fix too. We never submit — the user logs in themselves.
-onMessage("SAMSUNG_LOGIN", () => { enablePasswordAutofill(); return { done: true }; });
-
-// The field is rendered late by the Angular login app, so watch for it.
-console.log("[bank-sync] samsung content script loaded:", location.href, "(top frame:", window.top === window, ")");
-const loginObserver = new MutationObserver(enablePasswordAutofill);
-loginObserver.observe(document.documentElement, { childList: true, subtree: true });
+new MutationObserver(enablePasswordAutofill).observe(document.documentElement, { childList: true, subtree: true });
 enablePasswordAutofill();
