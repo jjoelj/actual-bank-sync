@@ -209,14 +209,19 @@ async function importToSure(label, accountId, transactions, onProgress) {
 
     const existing = await getTransactions(accountId, { startDate: minDate, endDate: maxDate });
     console.log(`${label}: ${existing.length} existing transactions in Sure (${minDate} → ${maxDate})`);
+    // Dedup on date + amount only, NOT the name. Sure has no imported_id, and it
+    // auto-enriches merchant names after import (e.g. "WALMART.COM*123" ->
+    // "Walmart"), so a name-based key stops matching on the next sync and the row
+    // re-imports as a duplicate. Amount and date are immutable, and the multiset
+    // count below still keeps genuinely-distinct same-day/same-amount rows.
     const knownCounts = new Map();
     for (const tx of existing) {
-        const fp = sureToFingerprint(tx);
+        const fp = `${tx.date}|${tx.signed_amount_cents}`;
         knownCounts.set(fp, (knownCounts.get(fp) || 0) + 1);
     }
     const newTxs = [];
     for (const tx of transactions) {
-        const fp = txFingerprint(tx);
+        const fp = `${tx.date}|${tx.amount}`;
         const remaining = knownCounts.get(fp) || 0;
         if (remaining > 0) {
             knownCounts.set(fp, remaining - 1);
