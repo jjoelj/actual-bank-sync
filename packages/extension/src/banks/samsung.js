@@ -44,6 +44,11 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
             for (const cycleDate of samsungCycleDates(startDate, today)) {
                 const result = await chrome.tabs.sendMessage(tab.id, { type: "FETCH_SAMSUNG_TRANSACTIONS", accountId, cycleDate });
                 if (result.error) throw new Error(`cycle ${cycleDate}: ${result.error}`);
+                // A wrong closing date returns 200 + no rows, indistinguishable
+                // from a quiet month, so say so.
+                if (!result.data.length && cycleDate !== "9999-12-31") {
+                    console.warn(`Samsung: no transactions for the cycle closing ${cycleDate}. If that's wrong, SAMSUNG_CLOSE_DAY is off.`);
+                }
                 for (const item of result.data) byId.set(item.id, item);
             }
             transactions = parseSamsungTransactions([...byId.values()], startDate);
