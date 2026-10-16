@@ -1,11 +1,10 @@
 // Samsung Galaxy Card is serviced by Barclays (barclaycardus.com).
 const BASE = "https://www.barclaycardus.com/servicing/jserv";
 
-onMessage("FETCH_SAMSUNG_TRANSACTIONS", ({ accountId }) =>
-    // ponytail: cycleDate=9999-12-31 returns only the current (unbilled) cycle.
-    // Fine for incremental syncs; add cycleDate pagination if backfill or
-    // cycle-boundary gaps matter.
-    fetch(`${BASE}/xapi/transactionsummary/v1/cards/accounts/${accountId}/transactions?journeyIndicator=TRANSACTION_SUMMARY&transactionStatus=POSTED&enrichedTransactions=true&cycleDate=9999-12-31`, {
+// One statement cycle per call: cycleDate=9999-12-31 is the current (unbilled)
+// cycle; a past cycle is named by its closing date (e.g. 2026-10-11).
+onMessage("FETCH_SAMSUNG_TRANSACTIONS", ({ accountId, cycleDate = "9999-12-31" }) =>
+    fetch(`${BASE}/xapi/transactionsummary/v1/cards/accounts/${accountId}/transactions?journeyIndicator=TRANSACTION_SUMMARY&transactionStatus=POSTED&enrichedTransactions=true&cycleDate=${cycleDate}`, {
         headers: { accept: "application/json, text/plain, */*", adrum: "isAjax:true", "correlation-id": crypto.randomUUID() },
         credentials: "include",
     })

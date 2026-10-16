@@ -39,9 +39,14 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
 
         try {
             reportProgress(options, 55, "Fetching transactions");
-            const result = await chrome.tabs.sendMessage(tab.id, { type: "FETCH_SAMSUNG_TRANSACTIONS", accountId });
-            if (result.error) throw new Error(result.error);
-            transactions = parseSamsungTransactions(result.data, startDate);
+            // Every statement cycle the window overlaps; ids dedup any overlap.
+            const byId = new Map();
+            for (const cycleDate of samsungCycleDates(startDate, today)) {
+                const result = await chrome.tabs.sendMessage(tab.id, { type: "FETCH_SAMSUNG_TRANSACTIONS", accountId, cycleDate });
+                if (result.error) throw new Error(`cycle ${cycleDate}: ${result.error}`);
+                for (const item of result.data) byId.set(item.id, item);
+            }
+            transactions = parseSamsungTransactions([...byId.values()], startDate);
 
             const balanceResult = await chrome.tabs.sendMessage(tab.id, { type: "FETCH_SAMSUNG_BALANCE" });
             if (balanceResult.error) {
@@ -192,6 +197,28 @@ function pollForSamsungData(tabId, onTick) {
             reject(new Error("Browser window closed"));
         });
     });
+}
+
+// ponytail: this card's statement closes on the 11th every month (Oct 2026
+// statement). Barclays has no cycle list we use, so closing dates are computed.
+// If the close day ever moves, past cycles fetch empty and the balance-drift log
+// shows the gap: update this.
+const SAMSUNG_CLOSE_DAY = 11;
+
+// cycleDates to fetch so [startDate, today] is covered: the current cycle plus
+// every closed cycle whose closing date is on/after startDate (a cycle closing
+// on C holds transactions from the previous close through C).
+export function samsungCycleDates(startDate, today) {
+    const cycles = ["9999-12-31"];
+    let [y, m] = today.split("-").map(Number);
+    const close = () => `${y}-${String(m).padStart(2, "0")}-${String(SAMSUNG_CLOSE_DAY).padStart(2, "0")}`;
+    const back = () => { if (--m === 0) { m = 12; y--; } };
+    if (close() > today) back();
+    while (close() >= startDate) {
+        cycles.push(close());
+        back();
+    }
+    return cycles;
 }
 
 // Barclays returns an unsigned amount; sign it from the transaction type

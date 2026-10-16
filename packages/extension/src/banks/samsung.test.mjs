@@ -1,6 +1,6 @@
 // Run: node src/banks/samsung.test.mjs
 import assert from "node:assert";
-import { parseSamsungTransactions, parseMoney } from "./samsung.js";
+import { parseSamsungTransactions, parseMoney, samsungCycleDates } from "./samsung.js";
 
 const tx = (id, type, value, date, merchant) => ({
     id,
@@ -27,3 +27,12 @@ assert.equal(parseMoney("$1,234.50"), 123450);
 assert.equal(parseMoney(null), null);
 
 console.log("samsung parse: OK");
+
+// Statement cycles (closes on the 11th): the window must reach back into every
+// cycle it overlaps, or a charge from just before a close is never fetched.
+assert.deepEqual(samsungCycleDates("2026-10-08", "2026-10-15"), ["9999-12-31", "2026-10-11"], "window spans the Oct 11 close");
+assert.deepEqual(samsungCycleDates("2026-10-12", "2026-10-15"), ["9999-12-31"], "window after the close: current cycle only");
+assert.deepEqual(samsungCycleDates("2026-10-11", "2026-10-15"), ["9999-12-31", "2026-10-11"], "closing day itself belongs to the closed cycle");
+assert.deepEqual(samsungCycleDates("2025-12-20", "2026-02-05"), ["9999-12-31", "2026-01-11"], "year wrap; Dec 11 close predates the window");
+assert.deepEqual(samsungCycleDates("2025-12-05", "2026-01-05"), ["9999-12-31", "2025-12-11"], "today before this month's close");
+console.log("samsungCycleDates: OK");
