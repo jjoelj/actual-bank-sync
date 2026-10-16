@@ -1,4 +1,4 @@
-import { autoLogin } from "../login.js";
+import { autoLogin, enterTextedCode, withDebugger, jitter } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
@@ -138,6 +138,15 @@ function installWFInterceptor() {
     };
 }
 
+// The where-to-text list (Work/Mobile/Home, WF texts as soon as one is
+// pressed), then the code box.
+const WF_CODE = {
+    from: /wells\s*fargo/i,
+    sendButton: '[class*="AuthMethodList__listItemButton"]',
+    sendButtonText: /mobile/i,
+    codeBox: "#otp",
+};
+
 function pollForWFData(tabId, wfAccountId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
@@ -148,6 +157,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
         let lastClickTime = 0;
         let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
         let loginAttempted = false;
+        let codeAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
 
@@ -167,21 +177,30 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                 if (!onWFPage) {
                     dataPageStart = null;
                     // Signing in: type the saved login once on the homepage box.
-                    // WF then asks where to text a code; as soon as that list
-                    // shows, the window comes up for the user. Also comes up 20s
-                    // after the submit, or after 15s if no password field showed.
+                    // WF then asks where to text a code; the code is read off
+                    // Google Messages and entered once. If that fails (or the
+                    // code screen is still up after), the window comes up for
+                    // the user. Also comes up 20s after the last submit, or
+                    // after 15s if no password field showed.
                     if (!shownToUser && tab.status === "complete" && tab.url?.includes("wellsfargo.com")) {
                         const [probe] = await chrome.scripting.executeScript({
                             target: { tabId },
                             func: () => ({
                                 password: !!document.querySelector("#password"),
-                                codeScreen: !!document.querySelector('[class*="AuthMethodList__"]'),
+                                codeScreen: !!document.querySelector('[class*="AuthMethodList__"], #otp'),
                             }),
                         });
                         const { password, codeScreen } = probe?.result || {};
                         if (password && !loginAttempted) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
                             loginAt = await autoLogin(tabId, "wellsfargo") ? Date.now() : 0;
+                        }
+                        if (codeScreen && !codeAttempted) {
+                            codeAttempted = true;
+                            if (await enterTextedCode(tabId, "WF", WF_CODE)) {
+                                loginAt = Date.now();
+                                return;
+                            }
                         }
                         const giveUp = codeScreen
                             || (loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000);
@@ -242,6 +261,18 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                             injectImmediately: true,
                             func: installWFInterceptor,
                         });
+                        interceptorReady = true;
+                    }
+
+                    // A minimized, unfocused page never sends the transactions
+                    // request; with focus emulated (debugger attached) it does.
+                    // Not found within 10s → the next tick clicks again.
+                    const readReqUrl = async () => (await chrome.scripting.executeScript({
+                        target: { tabId },
+                        world: "MAIN",
+                        func: () => window._wfReqUrl ?? null,
+                    }))?.[0]?.result;
+                    const reqUrl = await withDebugger(tabId, async () => {
                         await chrome.scripting.executeScript({
                             target: { tabId },
                             world: "MAIN",
@@ -250,15 +281,12 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                                 document.getElementById("filter-ALL")?.click();
                             },
                         });
-                        interceptorReady = true;
-                    }
-
-                    const result = await chrome.scripting.executeScript({
-                        target: { tabId },
-                        world: "MAIN",
-                        func: () => window._wfReqUrl ?? null,
-                    });
-                    const reqUrl = result?.[0]?.result;
+                        for (const deadline = Date.now() + 10000; Date.now() < deadline; await jitter(250, 250)) {
+                            const url = await readReqUrl();
+                            if (url) return url;
+                        }
+                        return null;
+                    }).catch(() => readReqUrl());
                     if (reqUrl) {
                         clearInterval(interval);
                         removeGuard();

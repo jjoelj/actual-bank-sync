@@ -150,7 +150,7 @@ login, so a changed password fixes itself.
 | Bank | Signs in by itself | Notes |
 |---|---|---|
 | Samsung (Barclays), Capital One, Fidelity, Target, SoFi, Venmo | Yes | |
-| US Bank, Wells Fargo | Yes, up to the texted code | The window comes up at the code screen; you enter the code |
+| US Bank, Wells Fargo | Yes, texted code included | Reads the code off Google Messages for web; without it, the window comes up at the code screen and you enter the code |
 | BILT | No | Signs in by texted code and email link |
 
 How it works:
@@ -167,6 +167,12 @@ How it works:
 - **Hidden windows:** syncs run in their own minimized window, which only comes
   up when you're needed. Bank pages are told they're visible so they keep
   loading while minimized.
+- **Texted codes:** if Google Messages for web is paired in this browser, the
+  extension asks the bank to text the code, reads it from the conversation
+  list (without opening the conversation, so it stays unread) and types it in.
+  It uses an open Messages tab, else launches the installed Messages app (Edge,
+  Default profile), else opens a pinned Messages tab and leaves it for next
+  time. Only a code that arrives after the request is used.
 
 To see which banks have a saved login, or forget one, run this in the
 extension's service-worker console (`edge://extensions` → **Inspect views:

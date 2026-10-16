@@ -1,4 +1,6 @@
-import { execFileSync } from "child_process";
+import { execFileSync, spawn } from "child_process";
+import { existsSync } from "fs";
+import { join } from "path";
 import { COMMANDS, runCommand, closeActual } from "./actual.js";
 
 // Saved bank logins are encrypted with Windows DPAPI (CurrentUser scope): the
@@ -17,9 +19,26 @@ function dpapi(method, base64In) {
     { input: base64In, encoding: "utf8", windowsHide: true }).trim();
 }
 
+// Launches the Google Messages web app the way its Start menu shortcut does,
+// so texted login codes can be read off it. The app id is fixed (derived from
+// the app's manifest). Resolves false when it isn't installed in Edge's
+// Default profile.
+// ponytail: Edge + Default profile only; read the profile from Local State if
+// another profile ever matters.
+const MESSAGES_APP_ID = "hpfldicfbfomlpcikngkocigghgafkph";
+function openMessagesApp() {
+  const edge = join(process.env["ProgramFiles(x86)"] || "", "Microsoft", "Edge", "Application");
+  const installed = join(process.env.LOCALAPPDATA || "", "Microsoft", "Edge", "User Data", "Default", "Web Applications", "Manifest Resources", MESSAGES_APP_ID);
+  if (process.platform !== "win32" || !existsSync(installed) || !existsSync(join(edge, "msedge_proxy.exe"))) return false;
+  spawn(join(edge, "msedge_proxy.exe"), ["--profile-directory=Default", `--app-id=${MESSAGES_APP_ID}`],
+    { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  return true;
+}
+
 const LOCAL_COMMANDS = {
   protect: ({ text }) => dpapi("Protect", Buffer.from(text, "utf8").toString("base64")),
   unprotect: ({ blob }) => Buffer.from(dpapi("Unprotect", blob), "base64").toString("utf8"),
+  openMessagesApp,
 };
 
 async function main() {

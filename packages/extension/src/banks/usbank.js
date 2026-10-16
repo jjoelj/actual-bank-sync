@@ -1,4 +1,4 @@
-import { autoLogin } from "../login.js";
+import { autoLogin, enterTextedCode } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncUSBank(settings, accountMappings, options = {}) {
@@ -141,15 +141,24 @@ export async function getUSBankAccountsForPopup() {
     }
 }
 
+// The code screen: Continue texts the code, then the code box shows on the same page.
+const USBANK_CODE = {
+    from: /u\.?\s*s\.?\s*bank/i,
+    sendButton: "#otp-cont-button",
+    codeBox: "#input_idshield-input",
+};
+
 // Types the saved password once on the sign-in page. US Bank then asks for a
-// texted code every time: as soon as that screen shows, the window comes up so
-// the user can send and enter the code; the poll carries on after. Also comes
-// up 20s after the submit, or after 15s if no password field ever showed.
+// texted code every time: it's read off Google Messages and entered once. If
+// that fails (or the code screen is still up after), the window comes up so
+// the user can finish; the poll carries on after. Also comes up 20s after the
+// last submit, or after 15s if no password field ever showed.
 function pollForUSBankData(tabId, onTick) {
     return new Promise((resolve, reject) => {
-        const start = Date.now();
+        let start = Date.now();
         let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
         let loginAttempted = false;
+        let codeAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
 
@@ -182,6 +191,13 @@ function pollForUSBankData(tabId, onTick) {
                     if (password && !loginAttempted) {
                         loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
                         loginAt = await autoLogin(tabId, "usbank") ? Date.now() : 0;
+                    }
+                    if (codeScreen && !codeAttempted) {
+                        codeAttempted = true;
+                        if (await enterTextedCode(tabId, "US Bank", USBANK_CODE)) {
+                            start = loginAt = Date.now();   // waiting on the text doesn't count toward the timeout
+                            return;
+                        }
                     }
                     const giveUp = codeScreen
                         || (loginAttempted ? Date.now() - loginAt > 20000 : (password && Date.now() - start > 15000));
