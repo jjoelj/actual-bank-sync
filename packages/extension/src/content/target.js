@@ -37,3 +37,6 @@ onMessage("FETCH_TARGET_TRANSACTIONS", ({ csrfToken, bankId, startDate, endDate 
         .then(r => r.json())
         .then(data => ({ data }))
 );
+
+// Sign-in page (/ecs/auth/): auto-login and saving manual logins.
+registerLogin("target", "#password");

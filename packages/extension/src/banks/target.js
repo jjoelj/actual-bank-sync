@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncTarget(settings, accountMappings, accountKey, options = {}) {
@@ -17,8 +18,6 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
     if (!mapped) return;
 
     const tab = await openTabBackground("https://mytargetcirclecard.target.com/account/transaction-history");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     let transactions;
     let balance = null;
@@ -97,6 +96,9 @@ function pollForTargetData(tabId, onTick) {
         let dataPageStart = null;
         let busy = false;
         let pendingAction = false;
+        let loginAttempted = false;
+        let loginAt = 0;
+        let shownToUser = false;
 
         const interval = setInterval(async () => {
             if (busy) return;
@@ -125,6 +127,30 @@ function pollForTargetData(tabId, onTick) {
                     return;
                 }
                 if (pendingAction) return;
+
+                // Sign-in (and any verification step) is under /ecs/auth/: type
+                // the saved login once; come to the front 20s after that submit,
+                // or after 15s there if no password field ever showed.
+                if (tab.url.includes("/ecs/auth/")) {
+                    if (!loginAttempted) {
+                        const [probe] = await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => !!document.querySelector("#password"),
+                        });
+                        if (probe?.result) {
+                            loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            loginAt = await autoLogin(tabId, "target") ? Date.now() : 0;
+                        }
+                    }
+                    const giveUp = loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - dataPageStart > 15000;
+                    if (!shownToUser && giveUp) {
+                        shownToUser = true;
+                        console.log("Target: waiting for login...");
+                        chrome.tabs.update(tabId, { active: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
+                    }
+                    return;
+                }
 
                 const result = await chrome.scripting.executeScript({
                     target: { tabId },
