@@ -1,5 +1,5 @@
 import { ACCOUNT_TYPES, BANK_LABELS, getBankForKey } from "./accounts.js";
-import { pacificDate, offsetDate, getSyncPlan, appTargets, migrateAccountMappings, pruneDeadMappings } from "./utils.js";
+import { pacificDate, offsetDate, quarterRange, retainedQuarters, spendRetentionStart, getSyncPlan, appTargets, migrateAccountMappings, pruneDeadMappings } from "./utils.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,12 +45,14 @@ const KNOWN_LOCAL_KEYS = new Set([
   "logBuffer",
   "cachedCategories", "categoryMappings", "pendingCategoryTxns",
   "reconcileIgnored",
+  "rewardsCategories", "bankCategorySpend", "backfillFrom",
   "venmoExpenseCategories", "venmoGroupExpenses", "venmoGroupSplits",
   "venmoGroupActualId", "venmoGroupSureId", "venmoSureSplitState",
 ]);
 
 const PER_ACCOUNT_KEYS = [
   "lastSyncDates", "lastSyncMetrics", "syncErrors", "lastTxDates", "pendingCategoryTxns",
+  "rewardsCategories", "bankCategorySpend", "backfillFrom",
 ];
 
 function isValidKey(key) {
@@ -159,6 +161,8 @@ function showView(view) {
   $("logs-view").style.display = view === "logs" ? "block" : "none";
   $("categories-view").style.display = view === "categories" ? "block" : "none";
   $("reconcile-view").style.display = view === "reconcile" ? "block" : "none";
+  $("rewards-view").style.display = view === "rewards" ? "block" : "none";
+  $("rewards-btn").classList.toggle("active", view === "rewards");
   $("settings-btn").classList.toggle("active", view === "settings");
   $("logs-btn").classList.toggle("active", view === "logs");
   $("categories-btn").classList.toggle("active", view === "categories");
@@ -1310,6 +1314,7 @@ function updateSyncBtn() {
   const hasMapping = Array.from(document.querySelectorAll("select[data-mapping-key]")).some(sel => sel.value);
   const syncFromDate = $("sync-from-date").value;
   $("sync-btn").style.display = (hasMapping && syncFromDate) ? "block" : "none";
+  updateRewardsBtn();
   if (hasMapping) renderSyncStatus();
 }
 
@@ -2256,5 +2261,222 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     updateSyncBtn();
   }
 });
+
+// ── 5% category cap tracker ───────────────────────────────────────────────────
+// US Bank Cash+ pays 5% on two chosen categories, capped at $2,000 of combined
+// purchases per calendar quarter. Categories and amounts are the bank's own
+// subcategories, recorded at sync time — the same ones the cap is assessed on.
+// The picks are per quarter, because Cash+ makes you re-choose every quarter.
+const REWARD_CAP_CENTS = 200000;
+
+// No other card has this cap, so the whole view exists only when a mapped Cash+
+// card does — matched on the card name US Bank reports.
+const CASH_PLUS_NAME = /cash\s*\+|cash\s*plus/i;
+
+function cashPlusKey() {
+  const row = [...document.querySelectorAll(".account-row")].find((r) =>
+    r.dataset.rowKey?.startsWith("usbank-") &&
+    CASH_PLUS_NAME.test(r.dataset.sourceLabel || "") &&
+    [...r.querySelectorAll("select[data-mapping-key]")].some((sel) => sel.value));
+  return row?.dataset.rowKey ?? null;
+}
+
+function updateRewardsBtn() {
+  const available = Boolean(cashPlusKey());
+  $("rewards-btn").style.display = available ? "" : "none";
+  // Unmapping the card while its view is open would strand an empty panel.
+  if (!available && $("rewards-view").style.display !== "none") showView("accounts");
+}
+
+// Which quarter is on screen. Reset to the current one each time the view opens —
+// the cap you're usually asking about is this quarter's.
+let rewardsQuarter = null;
+
+function fillRewardsQuarters() {
+  const quarters = retainedQuarters(pacificDate(new Date()));
+  const sel = $("rewards-quarter");
+  sel.innerHTML = "";
+  for (const q of quarters) sel.appendChild(new Option(q.label, q.startDate));
+  rewardsQuarter = quarters[0];
+  sel.value = rewardsQuarter.startDate;
+}
+
+$("rewards-btn").addEventListener("click", async () => {
+  const open = $("rewards-view").style.display !== "none";
+  showView(open ? "accounts" : "rewards");
+  if (!open) {
+    fillRewardsQuarters();
+    await runRewards();
+  }
+});
+$("rewards-run-btn").addEventListener("click", runRewards);
+$("rewards-backfill-btn").addEventListener("click", backfillRewards);
+$("rewards-quarter").addEventListener("change", async () => {
+  rewardsQuarter = quarterRange($("rewards-quarter").value);
+  await runRewards();
+});
+
+// Picks used to be one flat array per account; each quarter carries its own now,
+// so a legacy array becomes the picks for the quarter it was made in.
+function normalizeRewardPicks(rewardsCategories, currentLabel) {
+  let changed = false;
+  for (const [key, picks] of Object.entries(rewardsCategories)) {
+    if (Array.isArray(picks)) {
+      rewardsCategories[key] = { [currentLabel]: picks };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+async function runRewards() {
+  const key = cashPlusKey();
+  const out = $("rewards-output");
+  if (!key) {
+    out.innerHTML = "";
+    out.appendChild(recEmpty("No mapped Cash+ card."));
+    return;
+  }
+
+  const today = pacificDate(new Date());
+  const quarter = rewardsQuarter ?? quarterRange(today);
+  const { bankCategorySpend = {}, rewardsCategories = {} } =
+    await chrome.storage.local.get(["bankCategorySpend", "rewardsCategories"]);
+  if (normalizeRewardPicks(rewardsCategories, quarterRange(today).label)) {
+    await chrome.storage.local.set({ rewardsCategories });
+  }
+
+  // Purchases are stored negative; flip the sign so the totals read as spend and
+  // refunds subtract from the category the way they do against the real cap.
+  const byCategory = {};
+  for (const [date, category, cents, payee] of Object.values(bankCategorySpend[key] || {})) {
+    if (date < quarter.startDate || date > quarter.endDate) continue;
+    const bucket = (byCategory[category] ??= { total: 0, txns: [] });
+    bucket.total -= cents;
+    bucket.txns.push({ date, payee: payee || "—", cents: -cents });
+  }
+
+  const isCurrent = quarter.startDate === quarterRange(today).startDate;
+  renderRewards(key, quarter, byCategory, rewardsCategories[key]?.[quarter.label] || [], isCurrent);
+}
+
+// Re-fetch this account from the bank far enough back to fill the tracker's
+// whole retention window. The apps dedupe the re-import, so the only new thing
+// it brings home is the raw bank category on each transaction.
+async function backfillRewards() {
+  const key = cashPlusKey();
+  if (!key) return;
+  const from = spendRetentionStart(pacificDate(new Date()));
+  const { backfillFrom = {} } = await chrome.storage.local.get("backfillFrom");
+  backfillFrom[key] = from;
+  await chrome.storage.local.set({ backfillFrom });
+
+  $("rewards-backfill-btn").disabled = true;
+  $("rewards-output").innerHTML = "";
+  $("rewards-output").appendChild(recEmpty(`Re-syncing from ${from} — this opens the bank and takes a while.`));
+  try {
+    const res = await sendMessage({ type: "RUN_SYNC", options: { targetKeys: [key] } });
+    if (res?.error) throw new Error(res.error);
+  } catch (err) {
+    showStatus(`Backfill failed: ${err.message}`, "error");
+  } finally {
+    $("rewards-backfill-btn").disabled = false;
+  }
+  await runRewards();
+}
+
+function renderRewards(key, quarter, byCategory, chosen, isCurrent) {
+  const out = $("rewards-output");
+  out.innerHTML = "";
+
+  const rows = Object.entries(byCategory).sort((a, b) => b[1].total - a[1].total);
+  if (!rows.length) {
+    out.appendChild(recEmpty(`No bank categories recorded for ${quarter.label} — hit Backfill to re-sync this account and collect them.`));
+    return;
+  }
+
+  const total = chosen.reduce((sum, name) => sum + (byCategory[name]?.total || 0), 0);
+  const left = REWARD_CAP_CENTS - total;
+  const pct = Math.max(0, Math.min(100, (total / REWARD_CAP_CENTS) * 100));
+
+  // A closed quarter can't be acted on, so it reports how it ended rather than
+  // what's left to spend.
+  const status = left > 0
+    ? (isCurrent ? `${formatCurrency(left)} still earns 5%` : `finished ${formatCurrency(left)} under the cap`)
+    : (isCurrent ? "cap reached, switch cards" : "hit the cap");
+
+  const summary = document.createElement("div");
+  summary.className = "rewards-summary" + (left <= 0 ? " over" : left <= 25000 ? " close" : "");
+  summary.innerHTML = chosen.length
+    ? `<div class="rewards-total">`
+      + `<span class="rewards-spent">${escapeHtml(formatCurrency(total))}</span>`
+      + `<span class="rewards-cap">of ${escapeHtml(formatCurrency(REWARD_CAP_CENTS))}</span></div>`
+      + `<div class="rewards-bar"><div style="width:${pct.toFixed(1)}%"></div></div>`
+      + `<div class="rewards-note">${escapeHtml(quarter.label)} — ${escapeHtml(status)}</div>`
+    : `<div class="rewards-note">${escapeHtml(quarter.label)} — tick the two 5% categories you picked for this quarter.</div>`;
+  out.appendChild(summary);
+
+  const listTitle = document.createElement("div");
+  listTitle.className = "rewards-list-title";
+  listTitle.textContent = `Bank categories · ${quarter.label} · expand to see merchants`;
+  out.appendChild(listTitle);
+
+  const list = document.createElement("div");
+  list.className = "rewards-list";
+  for (const [name, { total: catTotal, txns }] of rows) {
+    // <details> so a category's merchants are one click away — the bank's own
+    // category is often broader than the reward category it feeds, and the
+    // merchant is the only way to see what's actually inside it.
+    const row = document.createElement("details");
+    const picked = chosen.includes(name);
+    row.className = "rewards-row" + (picked ? " picked" : "");
+
+    const head = document.createElement("summary");
+    head.className = "rewards-head";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = picked;
+    // Inside a <summary>, a click would also toggle the disclosure.
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => toggleRewardCategory(key, name, box.checked));
+    const nameEl = document.createElement("span");
+    nameEl.className = "rewards-name";
+    nameEl.textContent = name;
+    const amtEl = document.createElement("span");
+    amtEl.className = "rewards-amt";
+    amtEl.textContent = formatCurrency(catTotal);
+    head.append(box, nameEl, amtEl);
+    row.appendChild(head);
+
+    const inner = document.createElement("div");
+    inner.className = "rewards-txns";
+    for (const tx of txns.sort((a, b) => (a.date < b.date ? 1 : -1))) {
+      const line = document.createElement("div");
+      line.className = "rewards-txn";
+      line.innerHTML = `<span class="rewards-txn-date">${escapeHtml(tx.date.slice(5))}</span>`
+        + `<span class="rewards-txn-payee">${escapeHtml(tx.payee)}</span>`
+        + `<span class="rewards-txn-amt">${escapeHtml(formatCurrency(tx.cents))}</span>`;
+      inner.appendChild(line);
+    }
+    row.appendChild(inner);
+    list.appendChild(row);
+  }
+  out.appendChild(list);
+}
+
+async function toggleRewardCategory(key, name, on) {
+  const today = pacificDate(new Date());
+  const label = (rewardsQuarter ?? quarterRange(today)).label;
+  const { rewardsCategories = {} } = await chrome.storage.local.get("rewardsCategories");
+  normalizeRewardPicks(rewardsCategories, quarterRange(today).label);
+
+  const byQuarter = rewardsCategories[key] ?? {};
+  const set = new Set(byQuarter[label] || []);
+  on ? set.add(name) : set.delete(name);
+  byQuarter[label] = [...set];
+  rewardsCategories[key] = byQuarter;
+  await chrome.storage.local.set({ rewardsCategories });
+  await runRewards();
+}
 
 init();

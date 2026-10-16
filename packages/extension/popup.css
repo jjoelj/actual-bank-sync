@@ -59,6 +59,7 @@ header {
 #categories-btn,
 #reconcile-btn,
 #logs-btn,
+#rewards-btn,
 #settings-btn {
   position: relative;
   background: transparent;
@@ -75,10 +76,12 @@ header {
 #categories-btn:hover,
 #reconcile-btn:hover,
 #logs-btn:hover,
+#rewards-btn:hover,
 #settings-btn:hover  { color: var(--text); background: var(--border); }
 #settings-btn.active,
 #categories-btn.active,
 #reconcile-btn.active,
+#rewards-btn.active,
 #logs-btn.active     { color: var(--accent); }
 
 #categories-badge {
@@ -407,7 +410,8 @@ header {
 #settings-view,
 #logs-view,
 #categories-view,
-#reconcile-view {
+#reconcile-view,
+#rewards-view {
   padding: 12px 14px;
 }
 
@@ -1092,3 +1096,136 @@ option:disabled { color: var(--text-dim); }
 
 .dropdown-option:hover { background: var(--border); }
 
+/* ── 5% category cap tracker ─────────────────────────────────────────────── */
+
+#rewards-quarter {
+  margin-bottom: 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  padding: 7px 8px;
+  font-size: 13px;
+}
+
+#rewards-run-btn,
+#rewards-backfill-btn { padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+
+.rewards-summary {
+  padding: 14px;
+  margin-bottom: 14px;
+  background: linear-gradient(180deg, rgba(20, 21, 32, 0.96), rgba(16, 42, 67, 0.58));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.rewards-total {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.rewards-spent { font-size: 26px; font-weight: 700; color: var(--success); }
+.rewards-cap   { font-size: 13px; color: var(--text-dim); }
+
+.rewards-summary.close .rewards-spent { color: #f0b429; }
+.rewards-summary.over  .rewards-spent { color: var(--error); }
+
+.rewards-bar {
+  height: 6px;
+  margin: 10px 0 8px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.rewards-bar > div { height: 100%; border-radius: 999px; background: var(--success); }
+.rewards-summary.close .rewards-bar > div { background: #f0b429; }
+.rewards-summary.over  .rewards-bar > div { background: var(--error); }
+
+.rewards-note { font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+
+.rewards-list-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.rewards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 300px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+}
+
+.rewards-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  line-height: 1.3;
+}
+
+.rewards-row:hover  { border-color: var(--border-light); }
+.rewards-row.picked { border-color: var(--accent); }
+
+.rewards-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.rewards-head::-webkit-details-marker { display: none; }
+.rewards-head::after { content: "▸"; color: var(--text-dim); font-size: 10px; }
+.rewards-row[open] .rewards-head::after { content: "▾"; }
+
+.rewards-head input { flex: none; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+.rewards-txns {
+  border-top: 1px solid var(--border);
+  padding: 6px 10px 8px;
+  max-height: 190px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) transparent;
+}
+
+.rewards-txn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+
+.rewards-txn-date  { flex: none; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.rewards-txn-payee { flex: 1; min-width: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.rewards-txn-amt   { flex: none; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.rewards-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.rewards-row.picked .rewards-name { color: var(--text); font-weight: 600; }
+
+.rewards-amt {
+  flex: none;
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}

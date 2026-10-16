@@ -214,7 +214,9 @@ async function fetchUSBankTransactions(tabId, accessToken, afToken, accountToken
                 date,
                 amount: signedAmount,
                 payee_name: tx.description?.trim(),
-                category: tx.enrichedDetails?.category || undefined,
+                // subCategory is the one reward categories are assessed on
+                // ("Fast Food"); `category` is the broad parent ("Food & Dining").
+                category: tx.enrichedDetails?.subCategory || tx.enrichedDetails?.category || undefined,
                 imported_id: tx.transactionUniqueId ? `usbank-${tx.transactionUniqueId}` : undefined,
             });
         }

@@ -509,6 +509,20 @@ export function toLocalDate(timestamp) {
     return pacificDate(parsed);
 }
 
+// The calendar quarter containing isoStr — reward caps (US Bank Cash+'s $2,000
+// of 5% purchases) reset on quarter boundaries.
+export function quarterRange(isoStr) {
+    const [y, m] = isoStr.split("-").map(Number);
+    const q = Math.floor((m - 1) / 3);
+    const pad = (n) => String(n).padStart(2, "0");
+    return {
+        startDate: `${y}-${pad(q * 3 + 1)}-01`,
+        // Day 0 of the month after the quarter's last month = that month's last day.
+        endDate: `${y}-${pad(q * 3 + 3)}-${new Date(Date.UTC(y, q * 3 + 3, 0)).getUTCDate()}`,
+        label: `Q${q + 1} ${y}`,
+    };
+}
+
 export function offsetDate(isoStr, days) {
     const [y, m, d] = isoStr.split("-").map(Number);
     return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
@@ -535,6 +549,9 @@ function normalizeTxEntry(value, target) {
 // or Sure would otherwise leave the window starting after the hole and the gap
 // would never refill. A failed query keeps whatever was stored.
 export async function refreshLastTxDates(settings, lastTxDates, accountMappings, keys) {
+    const { backfillFrom = {} } = await chrome.storage.local.get("backfillFrom");
+    let consumed = false;
+
     for (const key of keys) {
         const target = appTargets(accountMappings[key]);
         const entry = normalizeTxEntry(lastTxDates[key], target);
@@ -552,9 +569,20 @@ export async function refreshLastTxDates(settings, lastTxDates, accountMappings,
                 console.warn(`Failed to read latest Actual transaction for ${key}:`, err.message);
             }
         }
+        // A one-shot backfill (from the reward tracker) drags the window back past
+        // what the apps already hold: re-fetched transactions still carry the raw
+        // bank category the tracker needs, and the apps dedupe the re-import by
+        // imported_id. A null entry already means full history, so leave it.
+        const from = backfillFrom[key];
+        if (from) {
+            for (const app of APPS) if (target[app] && entry[app] && from < entry[app]) entry[app] = from;
+            delete backfillFrom[key];
+            consumed = true;
+        }
+
         lastTxDates[key] = entry;
     }
-    await chrome.storage.local.set({ lastTxDates });
+    await chrome.storage.local.set({ lastTxDates, ...(consumed ? { backfillFrom } : {}) });
 }
 
 // The sync window starts at the earliest date any mapped app needs: its own
@@ -675,6 +703,62 @@ export async function updateLastSyncMetrics(key, transactions, byApp) {
 
 export async function updateLastSyncStats(key, transactions, byApp) {
     await updateLastSyncMetrics(key, transactions, byApp);
+    await recordBankCategories(key, transactions);
+}
+
+// How much category history the reward tracker keeps. Measured in quarters, not
+// days, and snapped to a quarter boundary: caps reset on those boundaries, so a
+// cutoff landing mid-quarter would leave the oldest retained quarter partial and
+// its total quietly wrong. Also where a backfill re-sync starts.
+export const SPEND_RETENTION_QUARTERS = 4;
+
+// The quarters the tracker holds data for, newest first. Walking back one day
+// from a quarter's start lands in the previous quarter, whatever its length.
+export function retainedQuarters(isoStr) {
+    const quarters = [];
+    let cursor = isoStr;
+    for (let i = 0; i < SPEND_RETENTION_QUARTERS; i++) {
+        const quarter = quarterRange(cursor);
+        quarters.push(quarter);
+        cursor = offsetDate(quarter.startDate, -1);
+    }
+    return quarters;
+}
+
+export function spendRetentionStart(isoStr) {
+    const [y, m] = isoStr.split("-").map(Number);
+    const q = Math.floor((m - 1) / 3) - (SPEND_RETENTION_QUARTERS - 1);
+    const year = y + Math.floor(q / 4);
+    const quarter = ((q % 4) + 4) % 4; // JS % keeps the sign; quarters must not
+    return `${year}-${String(quarter * 3 + 1).padStart(2, "0")}-01`;
+}
+
+// Keep the bank's own category on every synced transaction. This is the
+// categorization card reward caps are actually assessed on (US Bank Cash+ pays
+// 5% on two of *its* categories, capped at $2,000/quarter) — once imported, only
+// the mapped app category survives, and that can't be reversed back into it.
+// Stored per transaction rather than pre-summed so overlapping sync windows
+// dedupe by id instead of double-counting.
+export async function recordBankCategories(key, transactions) {
+    const categorized = transactions.filter((tx) => tx.category && tx.date);
+    if (!categorized.length) return;
+
+    const { bankCategorySpend = {} } = await chrome.storage.local.get("bankCategorySpend");
+    const entries = { ...(bankCategorySpend[key] || {}) };
+    for (const tx of categorized) {
+        // imported_id is the bank's stable id; without one, the same fingerprint
+        // the apps dedupe on. Either way a re-sync overwrites rather than adds.
+        const id = tx.imported_id || `${tx.date}|${tx.amount}|${tx.payee_name || ""}`;
+        // Payee too: the bank's category can be broader than its own reward
+        // categories, and the merchant is the only way to tell what's inside one.
+        entries[id] = [tx.date, tx.category, Number(tx.amount) || 0, tx.payee_name || ""];
+    }
+
+    const cutoff = spendRetentionStart(pacificDate(new Date()));
+    for (const [id, [date]] of Object.entries(entries)) if (date < cutoff) delete entries[id];
+
+    bankCategorySpend[key] = entries;
+    await chrome.storage.local.set({ bankCategorySpend });
 }
 
 function updateSyncSummary(summary, sessionId, key, metrics) {

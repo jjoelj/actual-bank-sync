@@ -57,6 +57,7 @@ const TRANSACTIONS_QUERY = `query txnsDetails($input: TxnsAcctSearchRequestInput
         debitCreditMemo
         enrichedDetails {
           category
+          subCategory
         }
       }
       _metadata {

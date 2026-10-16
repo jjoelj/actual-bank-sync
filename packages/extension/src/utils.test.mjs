@@ -1,6 +1,10 @@
 // Run: node src/utils.test.mjs
 import assert from "node:assert";
-import { pruneDeadMappings, refreshLastTxDates, getSyncPlan } from "./utils.js";
+import {
+  pruneDeadMappings, refreshLastTxDates, getSyncPlan, quarterRange,
+  recordBankCategories, offsetDate, pacificDate, spendRetentionStart, retainedQuarters,
+  SPEND_RETENTION_QUARTERS,
+} from "./utils.js";
 
 const mappings = {
   "bilt-credit":    { sure: "s1", actual: "dead" },   // actual gone, sure stays
@@ -69,4 +73,82 @@ assert.equal(dates["sofi-credit"].sure, "2026-05-01", "watermark rolls back to w
 assert.equal(store.lastTxDates["sofi-credit"].sure, "2026-05-01", "rolled-back watermark is persisted");
 assert.equal(getSyncPlan({}, "2020-01-01", "sofi-credit", dates, maps["sofi-credit"]).startDate, "2026-05-01");
 
+// A pending backfill drags the window back past what the app holds, once.
+store.backfillFrom = { "sofi-credit": "2026-02-01" };
+await refreshLastTxDates({}, dates, maps, ["sofi-credit"]);
+assert.equal(dates["sofi-credit"].sure, "2026-02-01", "backfill wins over the app's later date");
+assert.deepEqual(store.backfillFrom, {}, "backfill is consumed, not repeated every sync");
+
+await refreshLastTxDates({}, dates, maps, ["sofi-credit"]);
+assert.equal(dates["sofi-credit"].sure, "2026-05-01", "next sync is back to the app's own date");
+
 console.log("refreshLastTxDates: OK");
+
+// Reward caps reset on calendar quarters — every month must land in the right
+// one, and each quarter must end on its real last day (Q1 in a leap year too).
+assert.deepEqual(quarterRange("2026-08-08"), { startDate: "2026-07-01", endDate: "2026-09-30", label: "Q3 2026" });
+assert.deepEqual(quarterRange("2026-01-01"), { startDate: "2026-01-01", endDate: "2026-03-31", label: "Q1 2026" });
+assert.deepEqual(quarterRange("2026-12-31"), { startDate: "2026-10-01", endDate: "2026-12-31", label: "Q4 2026" });
+assert.equal(quarterRange("2024-02-29").endDate, "2024-03-31", "leap year Q1 still ends 03-31");
+for (let m = 1; m <= 12; m++) {
+  const r = quarterRange(`2026-${String(m).padStart(2, "0")}-15`);
+  assert.ok(r.startDate <= `2026-${String(m).padStart(2, "0")}-15` && r.endDate >= `2026-${String(m).padStart(2, "0")}-15`, `month ${m} inside its quarter`);
+}
+
+console.log("quarterRange: OK");
+
+// Retention must land on a quarter boundary — a mid-quarter cutoff would leave
+// the oldest kept quarter partial, and its total silently short.
+assert.equal(spendRetentionStart("2026-08-08"), "2025-10-01", "3 quarters back from Q3 2026");
+assert.equal(spendRetentionStart("2026-01-15"), "2025-04-01", "crosses the year backwards");
+assert.equal(spendRetentionStart("2026-12-31"), "2026-01-01", "Q4 keeps the whole year");
+for (const d of ["2026-01-15", "2026-04-15", "2026-08-08", "2026-11-30", "2027-02-01"]) {
+  const start = spendRetentionStart(d);
+  assert.match(start, /-(01|04|07|10)-01$/, `${d} → ${start} is a quarter start`);
+  const months = (Number(d.slice(0, 4)) - Number(start.slice(0, 4))) * 12 + (Number(d.slice(5, 7)) - Number(start.slice(5, 7)));
+  assert.equal(Math.floor(months / 3), SPEND_RETENTION_QUARTERS - 1, `${d} keeps exactly ${SPEND_RETENTION_QUARTERS} quarters`);
+}
+
+console.log("spendRetentionStart: OK");
+
+// The quarter picker's options: newest first, contiguous, none repeated, and
+// reaching back to exactly where retention starts.
+const picker = retainedQuarters("2026-08-08");
+assert.equal(picker.length, SPEND_RETENTION_QUARTERS);
+assert.deepEqual(picker.map(q => q.label), ["Q3 2026", "Q2 2026", "Q1 2026", "Q4 2025"]);
+assert.equal(picker.at(-1).startDate, spendRetentionStart("2026-08-08"), "oldest option is the retention floor");
+for (let i = 1; i < picker.length; i++) {
+  assert.equal(offsetDate(picker[i].endDate, 1), picker[i - 1].startDate, "quarters are contiguous, no gap");
+}
+
+console.log("retainedQuarters: OK");
+
+// Raw bank categories: overlapping sync windows must overwrite, not double-count,
+// or the cap total drifts up every re-sync. Dates are relative so the retention
+// prune is exercised no matter when this runs.
+const today = pacificDate(new Date());
+const recent = offsetDate(today, -3);
+const ancient = offsetDate(spendRetentionStart(today), -1); // one day outside retention
+
+await recordBankCategories("usbank-1", [
+  { date: recent,  category: "Fast Food", amount: -1250, imported_id: "usbank-a", payee_name: "TACO BELL" },
+  { date: recent,  category: "Fast Food", amount: -2000, imported_id: "usbank-b", payee_name: "CHIPOTLE" },
+  { date: ancient, category: "Fast Food", amount: -9900, imported_id: "usbank-old", payee_name: "OLD" },
+  { date: recent,  amount: -500, imported_id: "usbank-nocat" }, // no category → not tracked
+]);
+await recordBankCategories("usbank-1", [
+  { date: recent, category: "Fast Food", amount: -1250, imported_id: "usbank-a", payee_name: "TACO BELL" },
+  { date: recent, category: "Gyms", amount: -5000, payee_name: "PLANET FITNESS" }, // no id → fingerprint
+]);
+
+const tracked = store.bankCategorySpend["usbank-1"];
+assert.equal(Object.keys(tracked).length, 3, "re-sync overwrites; uncategorized skipped, expired pruned");
+assert.ok(!("usbank-old" in tracked), "past the retention window is dropped");
+assert.deepEqual(tracked["usbank-a"], [recent, "Fast Food", -1250, "TACO BELL"], "payee kept for drill-down");
+
+const fastFood = Object.values(tracked)
+  .filter(([, category]) => category === "Fast Food")
+  .reduce((sum, [, , cents]) => sum - cents, 0);
+assert.equal(fastFood, 3250, "$32.50 counted once, not twice");
+
+console.log("recordBankCategories: OK");
