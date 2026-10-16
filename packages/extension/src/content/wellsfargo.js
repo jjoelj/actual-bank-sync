@@ -51,3 +51,6 @@ onMessage("FETCH_WF_CATEGORIES", async ({ additionalDetailsUrl, transactionIds }
 
     return { categories };
 });
+
+// Sign-in box on the www.wellsfargo.com homepage: auto-login and saving manual logins.
+registerLogin("wellsfargo", "#password");

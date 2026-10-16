@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
@@ -20,8 +21,6 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
     if (!mapped) return;
 
     const tab = await openTabBackground("https://www.wellsfargo.com/");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
 
     const wfAccountId = accountKey.slice("wf-".length);
 
@@ -147,8 +146,14 @@ function pollForWFData(tabId, wfAccountId, onTick) {
         let wfBalance = null;
         let interceptorReady = false;
         let lastClickTime = 0;
+        let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
+        let loginAttempted = false;
+        let loginAt = 0;
+        let shownToUser = false;
 
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), WF_STATE_LABELS[wfState]);
             try {
@@ -161,6 +166,32 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                 );
                 if (!onWFPage) {
                     dataPageStart = null;
+                    // Signing in: type the saved login once on the homepage box.
+                    // WF then asks where to text a code; as soon as that list
+                    // shows, the window comes up for the user. Also comes up 20s
+                    // after the submit, or after 15s if no password field showed.
+                    if (!shownToUser && tab.status === "complete" && tab.url?.includes("wellsfargo.com")) {
+                        const [probe] = await chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: () => ({
+                                password: !!document.querySelector("#password"),
+                                codeScreen: !!document.querySelector('[class*="AuthMethodList__"]'),
+                            }),
+                        });
+                        const { password, codeScreen } = probe?.result || {};
+                        if (password && !loginAttempted) {
+                            loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            loginAt = await autoLogin(tabId, "wellsfargo") ? Date.now() : 0;
+                        }
+                        const giveUp = codeScreen
+                            || (loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000);
+                        if (giveUp) {
+                            shownToUser = true;
+                            console.log(codeScreen ? "WF: code required; waiting for you to enter it..." : "WF: waiting for login...");
+                            chrome.tabs.update(tabId, { active: true });
+                            chrome.windows.update(tab.windowId, { state: "normal", focused: true });
+                        }
+                    }
                     return;
                 }
 
@@ -236,6 +267,8 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                 }
             } catch {
                 // Tab not ready yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
 

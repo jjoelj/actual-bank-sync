@@ -95,7 +95,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://connect.secure.wellsfargo.com/*"],
+      "matches": ["https://connect.secure.wellsfargo.com/*", "https://www.wellsfargo.com/*"],
       "js": ["src/content/content-utils.js", "src/content/wellsfargo.js"],
       "run_at": "document_idle"
     },
