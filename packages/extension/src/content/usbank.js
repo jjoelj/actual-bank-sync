@@ -101,3 +101,6 @@ onMessage("FETCH_USBANK_TRANSACTIONS", ({ accessToken, afToken, accountToken, st
             totalPages: json?.data?.txnsDetails?.txnsResponse?._metadata?.totalPages ?? 1,
         }))
 );
+
+// Sign-in page (/auth/login/): auto-login and saving manual logins.
+registerLogin("usbank", "#input_aw-password");

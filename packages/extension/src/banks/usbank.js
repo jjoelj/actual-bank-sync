@@ -1,3 +1,4 @@
+import { autoLogin } from "../login.js";
 import { getSyncPlan, refreshLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncUSBank(settings, accountMappings, options = {}) {
@@ -10,8 +11,6 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
     const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://onlinebanking.usbank.com/auth/login/");
-    chrome.tabs.update(tab.id, { active: true });
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });
     activeKeys.forEach(k => reportProgress(options, k, 15, "Opening US Bank…"));
 
     let usbankData;
@@ -142,11 +141,21 @@ export async function getUSBankAccountsForPopup() {
     }
 }
 
+// Types the saved password once on the sign-in page. US Bank then asks for a
+// texted code every time: as soon as that screen shows, the window comes up so
+// the user can send and enter the code; the poll carries on after. Also comes
+// up 20s after the submit, or after 15s if no password field ever showed.
 function pollForUSBankData(tabId, onTick) {
     return new Promise((resolve, reject) => {
         const start = Date.now();
+        let busy = false;   // autoLogin takes seconds; don't let ticks overlap it
+        let loginAttempted = false;
+        let loginAt = 0;
+        let shownToUser = false;
 
         const interval = setInterval(async () => {
+            if (busy) return;
+            busy = true;
             const elapsed = Date.now() - start;
             if (elapsed > POLL_TIMEOUT_MS) {
                 clearInterval(interval);
@@ -161,6 +170,29 @@ function pollForUSBankData(tabId, onTick) {
                 if (tab.status !== "complete") return;
                 if (!tab.url?.includes("onlinebanking.usbank.com")) return;
 
+                if (!shownToUser) {
+                    const [probe] = await chrome.scripting.executeScript({
+                        target: { tabId },
+                        func: () => ({
+                            password: !!document.querySelector("#input_aw-password"),
+                            codeScreen: !!document.querySelector("#otp-cont-button, #input_idshield-input"),
+                        }),
+                    });
+                    const { password, codeScreen } = probe?.result || {};
+                    if (password && !loginAttempted) {
+                        loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                        loginAt = await autoLogin(tabId, "usbank") ? Date.now() : 0;
+                    }
+                    const giveUp = codeScreen
+                        || (loginAttempted ? Date.now() - loginAt > 20000 : (password && Date.now() - start > 15000));
+                    if (giveUp) {
+                        shownToUser = true;
+                        console.log(codeScreen ? "US Bank: code required; waiting for you to enter it..." : "US Bank: waiting for login...");
+                        chrome.tabs.update(tabId, { active: true });
+                        chrome.windows.update(tab.windowId, { state: "normal", focused: true });
+                    }
+                }
+
                 const result = await chrome.tabs.sendMessage(tabId, { type: "GET_USBANK_DATA" });
                 if (result?.accessToken && result?.accounts?.length > 0) {
                     clearInterval(interval);
@@ -169,6 +201,8 @@ function pollForUSBankData(tabId, onTick) {
                 }
             } catch {
                 // Tab not ready or content script not loaded yet
+            } finally {
+                busy = false;
             }
         }, POLL_INTERVAL_MS);
 
