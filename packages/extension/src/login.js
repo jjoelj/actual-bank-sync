@@ -50,6 +50,14 @@ export async function autoLogin(tabId, bank, { submit = "enter" } = {}) {
             await pressKey(send, { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
         }
         console.log(`${bank}: submitted saved login`);
+        // Stay attached until the page navigates (≤10s): detaching ends focus
+        // emulation, and a submit handler that does async work first (Target)
+        // stalls once the minimized page goes back to unfocused.
+        const { url: before } = await chrome.tabs.get(tabId);
+        for (const deadline = Date.now() + 10000; Date.now() < deadline; await jitter(250, 250)) {
+            const t = await chrome.tabs.get(tabId);
+            if (t.status === "loading" || t.url !== before) break;
+        }
         return true;
     } catch (err) {
         console.warn(`${bank}: auto-login failed:`, err.message);
