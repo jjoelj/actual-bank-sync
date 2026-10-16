@@ -38,7 +38,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
                 activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 30), "Logging in…"));
             });
         } catch (err) {
-            console.error("SoFi: login failed, giving up.", err.message);
+            console.warn("SoFi: login failed, giving up.", err.message);
             return;
         }
 
@@ -99,7 +99,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
             }
         }
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     // Drop the incoming side of internal transfers: a "From …" transaction is a
@@ -483,6 +483,6 @@ export async function getSoFiAccountsForPopup() {
     } catch (err) {
         throw new Error("Timed out waiting for SoFi login");
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 }

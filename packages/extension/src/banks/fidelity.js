@@ -29,7 +29,7 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
                 reportProgress(options, 15 + Math.round(t * 35), msg ?? "Logging in…");
             });
         } catch (err) {
-            console.error("Fidelity: login failed, giving up.");
+            console.warn("Fidelity: login failed, giving up.");
             return;
         }
 
@@ -59,7 +59,7 @@ export async function syncFidelity(settings, accountMappings, accountKey, option
             return;
         }
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     let currentBalance = null;
@@ -249,7 +249,7 @@ function pollForFidelityData(tabId, onTick) {
                             fidelityState = "get-data";
                             const url = changeInfo.url;
                             chrome.tabs.update(trackingTabId, { url });
-                            if (updatedTabId !== trackingTabId) chrome.tabs.remove(updatedTabId);
+                            if (updatedTabId !== trackingTabId) chrome.tabs.remove(updatedTabId).catch(() => {});   // may already be closed
                         });
                     }
 

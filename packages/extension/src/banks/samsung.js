@@ -33,7 +33,7 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
                 reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
             });
         } catch (err) {
-            console.error("Samsung: login failed, giving up.", err.message);
+            console.warn("Samsung: login failed, giving up.", err.message);
             return;
         }
 
@@ -71,7 +71,7 @@ export async function syncSamsung(settings, accountMappings, accountKey, options
             return;
         }
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     const isFirstSync = !lastSyncDates[accountKey];

@@ -35,7 +35,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
             });
             console.log("WF account ID:", wfData.accountId);
         } catch (err) {
-            console.error("WF: login failed, giving up.");
+            console.warn("WF: login failed, giving up.");
             return;
         }
         wfBalance = wfData.balance;
@@ -83,7 +83,7 @@ export async function syncWellsFargo(settings, accountMappings, accountKey, opti
             imported_id: t.referenceNumber ? `wf-${t.referenceNumber}` : (t.id != null ? `wf-${t.id}` : undefined),
         }));
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     try {
@@ -160,12 +160,17 @@ function pollForWFData(tabId, wfAccountId, onTick) {
         let codeAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
+        let status = "Signing in…";   // sign-in steps; null once on the account pages
+        const say = msg => {
+            status = msg;
+            onTick?.(Math.min((Date.now() - start) / POLL_TIMEOUT_MS, 0.99), msg);
+        };
 
         const interval = setInterval(async () => {
             if (busy) return;
             busy = true;
             const elapsed = Date.now() - start;
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), WF_STATE_LABELS[wfState]);
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), status ?? WF_STATE_LABELS[wfState]);
             try {
                 const tab = await chrome.tabs.get(tabId);
                 console.log("WF state:", wfState, "url:", tab.url);
@@ -193,12 +198,14 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                         const { password, codeScreen } = probe?.result || {};
                         if (password && !loginAttempted) {
                             loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                            say("Signing in with saved login…");
                             loginAt = await autoLogin(tabId, "wellsfargo") ? Date.now() : 0;
                         }
                         if (codeScreen && !codeAttempted) {
                             codeAttempted = true;
-                            if (await enterTextedCode(tabId, "WF", WF_CODE)) {
+                            if (await enterTextedCode(tabId, "WF", WF_CODE, say)) {
                                 loginAt = Date.now();
+                                say("Finishing sign-in…");
                                 return;
                             }
                         }
@@ -206,6 +213,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                             || (loginAttempted ? Date.now() - loginAt > 20000 : Date.now() - start > 15000);
                         if (giveUp) {
                             shownToUser = true;
+                            say(codeScreen ? "Enter the texted code in the Wells Fargo window" : "Sign in in the Wells Fargo window");
                             console.log(codeScreen ? "WF: code required; waiting for you to enter it..." : "WF: waiting for login...");
                             chrome.tabs.update(tabId, { active: true });
                             chrome.windows.update(tab.windowId, { state: "normal", focused: true });
@@ -214,6 +222,7 @@ function pollForWFData(tabId, wfAccountId, onTick) {
                     return;
                 }
 
+                status = null;
                 if (!dataPageStart) dataPageStart = Date.now();
                 if (Date.now() - dataPageStart > POLL_TIMEOUT_MS) {
                     clearInterval(interval);
@@ -317,7 +326,7 @@ export async function getWellsFargoAccountsForPopup() {
     } catch (err) {
         throw new Error("Timed out waiting for Wells Fargo login");
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 }
 

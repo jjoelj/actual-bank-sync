@@ -15,11 +15,11 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
 
     let usbankData;
     try {
-        usbankData = await pollForUSBankData(tab.id, (t) => {
-            activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 35), "Logging in…"));
+        usbankData = await pollForUSBankData(tab.id, (t, msg) => {
+            activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 35), msg));
         });
     } catch (err) {
-        console.error("US Bank: login failed, giving up.", err.message);
+        console.warn("US Bank: login failed, giving up.", err.message);
         return;
     }
 
@@ -101,7 +101,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
         }
     }
 
-    chrome.tabs.remove(tab.id);
+    chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
 }
 
 export async function getUSBankAccountsForPopup() {
@@ -137,7 +137,7 @@ export async function getUSBankAccountsForPopup() {
     } catch (err) {
         throw new Error("Timed out waiting for US Bank login");
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 }
 
@@ -161,6 +161,11 @@ function pollForUSBankData(tabId, onTick) {
         let codeAttempted = false;
         let loginAt = 0;
         let shownToUser = false;
+        let status = "Signing in…";
+        const say = msg => {
+            status = msg;
+            onTick?.(Math.min((Date.now() - start) / POLL_TIMEOUT_MS, 0.99), msg);
+        };
 
         const interval = setInterval(async () => {
             if (busy) return;
@@ -172,7 +177,7 @@ function pollForUSBankData(tabId, onTick) {
                 reject(new Error("Timed out waiting for US Bank data"));
                 return;
             }
-            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99));
+            onTick?.(Math.min(elapsed / POLL_TIMEOUT_MS, 0.99), status);
 
             try {
                 const tab = await chrome.tabs.get(tabId);
@@ -190,12 +195,14 @@ function pollForUSBankData(tabId, onTick) {
                     const { password, codeScreen } = probe?.result || {};
                     if (password && !loginAttempted) {
                         loginAttempted = true;   // one auto-login per sync; a bad password falls to the user
+                        say("Signing in with saved login…");
                         loginAt = await autoLogin(tabId, "usbank") ? Date.now() : 0;
                     }
                     if (codeScreen && !codeAttempted) {
                         codeAttempted = true;
-                        if (await enterTextedCode(tabId, "US Bank", USBANK_CODE)) {
+                        if (await enterTextedCode(tabId, "US Bank", USBANK_CODE, say)) {
                             start = loginAt = Date.now();   // waiting on the text doesn't count toward the timeout
+                            say("Finishing sign-in…");
                             return;
                         }
                     }
@@ -203,6 +210,7 @@ function pollForUSBankData(tabId, onTick) {
                         || (loginAttempted ? Date.now() - loginAt > 20000 : (password && Date.now() - start > 15000));
                     if (giveUp) {
                         shownToUser = true;
+                        say(codeScreen ? "Enter the texted code in the US Bank window" : "Sign in in the US Bank window");
                         console.log(codeScreen ? "US Bank: code required; waiting for you to enter it..." : "US Bank: waiting for login...");
                         chrome.tabs.update(tabId, { active: true });
                         chrome.windows.update(tab.windowId, { state: "normal", focused: true });

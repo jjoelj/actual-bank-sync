@@ -89,22 +89,28 @@ export async function waitForNavigation(tabId) {
 // matches sendButtonText, if given), reads the code off Google Messages
 // (a conversation mentioning `from`), types it into codeBox and presses Enter,
 // all with trusted input. Resolves false on any failure; the caller then
-// shows the window so the user can finish.
-export async function enterTextedCode(tabId, bank, { from, sendButton, sendButtonText, codeBox }) {
+// shows the window so the user can finish. say(msg) reports each step.
+export async function enterTextedCode(tabId, bank, { from, sendButton, sendButtonText, codeBox }, say = () => {}) {
+    let sms;
     try {
         console.log(`${bank}: reading Google Messages before asking for the code`);
+        say("Checking Google Messages…");
         // Before the text is sent. A failed read still asks for the text, so
         // the user only has to type the code.
-        const sms = await watchForCode(from).catch(err => err);
+        sms = await watchForCode(from).catch(err => err);
         console.log(`${bank}: asking for the code by text`);
+        say("Asking for a texted code…");
         await withDebugger(tabId, async send => {
             await focusWhenReady(tabId, sendButton, sendButtonText);
             await jitter(150, 300);
             await pressKey(send, SPACE);
         });
         if (sms instanceof Error) throw sms;
+        say("Waiting for the texted code…");
         const code = await sms.wait();
+        await sms.release();
         console.log(`${bank}: got the texted code; entering it`);
+        say("Entering the texted code…");
         await withDebugger(tabId, async send => {
             await focusWhenReady(tabId, codeBox);
             await jitter(200, 500);
@@ -116,8 +122,10 @@ export async function enterTextedCode(tabId, bank, { from, sendButton, sendButto
         });
         return true;
     } catch (err) {
-        console.log(`${bank}: couldn't enter the texted code:`, err.message);
+        console.warn(`${bank}: couldn't enter the texted code:`, err.message);
         return false;
+    } finally {
+        await sms?.release?.();   // Messages tab's debugger, if still attached
     }
 }
 
@@ -170,7 +178,7 @@ async function typeInto(tabId, send, field, text) {
         await jitter(200, 500);
         await typeText(send, text);
         if ((await ask(tabId, { type: "VERIFY_LOGIN_FIELD", field, value: text })).matches) return;
-        console.log(`${field} field didn't take every keystroke (attempt ${attempt})`);
+        console.warn(`${field} field didn't take every keystroke (attempt ${attempt})`);
     }
     throw new Error(`${field} field still wrong after retyping; not submitting`);
 }

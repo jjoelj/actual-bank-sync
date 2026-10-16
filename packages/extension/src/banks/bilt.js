@@ -31,7 +31,7 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
                 reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
             });
         } catch (err) {
-            console.error("Bilt: login failed, giving up.");
+            console.warn("Bilt: login failed, giving up.");
             return;
         }
 
@@ -65,7 +65,7 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
             currentBalance = balResult.balance;
         }
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     const isFirstSync = !lastSyncDates[accountKey];

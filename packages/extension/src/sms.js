@@ -13,12 +13,15 @@ const timeout = (p, ms) => Promise.race([p, jitter(ms).then(() => { throw new Er
 // Edge's sleeping tabs freeze or discard a background Messages tab, and a
 // script injected into a frozen tab hangs. Wake it and keep it awake.
 async function messagesTab() {
+    // The app's window counts too, so an open app is never launched again.
     const find = async () => (await chrome.tabs.query({ url: "https://messages.google.com/web/*" }))[0];
     let tab = await find();
     // Installed as an app (Edge) → launch it, like its Start menu shortcut.
     if (!tab && await sendToHost("openMessagesApp").catch(() => false)) {
         console.log("Opening the Google Messages app");
         for (const deadline = Date.now() + 15000; !(tab = await find()) && Date.now() < deadline;) await jitter(500);
+        // The launcher has no start-minimized option; minimize as soon as it shows.
+        if (tab) await chrome.windows.update(tab.windowId, { state: "minimized" }).catch(() => {});
     }
     const opened = !tab;
     if (tab) {
@@ -66,11 +69,13 @@ async function codesFrom(tabId, from) {
 // would look new.
 export async function watchForCode(from) {
     const { tabId, opened } = await messagesTab();
+    const release = await emulateFocus(tabId);
     let seen;
     for (const deadline = Date.now() + 20000; !(seen = await codesFrom(tabId, from)); await jitter(1000)) {
         const why = await unpaired(tabId) ? "Google Messages for web isn't paired in this browser"
             : Date.now() > deadline ? "couldn't read the Google Messages conversation list" : null;
         if (why) {
+            await release();
             if (opened) chrome.tabs.remove(tabId).catch(() => {});
             throw new Error(why);
         }
@@ -84,5 +89,22 @@ export async function watchForCode(from) {
             }
             throw new Error("no new code showed up in Google Messages");
         },
+        release,   // call when done, read or not
     };
+}
+
+// A background or minimized Messages window can hold off updating its list
+// until it's looked at. Focus emulation (debugger attached) keeps it live, as
+// with the bank pages; no size override, so a visible app window keeps its
+// layout. Edge shows its debugging bar meanwhile. Not attachable (DevTools
+// open on it) → carries on without. Resolves the detach.
+async function emulateFocus(tabId) {
+    const target = { tabId };
+    try {
+        await chrome.debugger.attach(target, "1.3");
+        await chrome.debugger.sendCommand(target, "Emulation.setFocusEmulationEnabled", { enabled: true });
+    } catch {
+        return async () => {};
+    }
+    return () => chrome.debugger.detach(target).catch(() => {});
 }

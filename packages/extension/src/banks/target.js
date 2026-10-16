@@ -29,7 +29,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
                 reportProgress(options, 15 + Math.round(t * 35), "Logging in…");
             });
         } catch (err) {
-            console.error("Target: login failed, giving up.");
+            console.warn("Target: login failed, giving up.");
             return;
         }
 
@@ -60,7 +60,7 @@ export async function syncTarget(settings, accountMappings, accountKey, options 
             return;
         }
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     const isFirstSync = !lastSyncDates[accountKey];

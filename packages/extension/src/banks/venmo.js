@@ -53,11 +53,11 @@ export async function syncVenmo(settings, accountMappings, options = {}) {
             if (needsCredit) reportProgress(options, "venmo-credit", 15 + Math.round(t * 35), "Logging in…");
         });
     } catch (err) {
-        console.error("Venmo: login failed, giving up.");
+        console.warn("Venmo: login failed, giving up.");
         await setSyncError("venmo-cash", "Login failed. Please log in and run sync again.");
         return;
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     if (needsCash) {

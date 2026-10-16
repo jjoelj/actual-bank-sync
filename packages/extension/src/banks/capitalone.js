@@ -19,10 +19,10 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
             activeKeys.forEach(k => reportProgress(options, k, 15 + Math.round(t * 35), "Logging in…"));
         });
     } catch (err) {
-        console.error("Capital One: login failed, giving up.", err.message);
+        console.warn("Capital One: login failed, giving up.", err.message);
         return;
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 
     await chrome.storage.local.set({ cachedCapitalOneAccounts: caponeAccounts });
@@ -80,7 +80,7 @@ export async function getCapitalOneAccountsForPopup() {
     } catch (err) {
         throw new Error("Timed out waiting for Capital One login");
     } finally {
-        chrome.tabs.remove(tab.id);
+        chrome.tabs.remove(tab.id).catch(() => {});   // may already be closed
     }
 }
 
