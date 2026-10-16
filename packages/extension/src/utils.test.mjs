@@ -1,6 +1,42 @@
 // Run: node src/utils.test.mjs
 import assert from "node:assert";
-import { refreshLastTxDates, getSyncPlan } from "./utils.js";
+import { pruneDeadMappings, refreshLastTxDates, getSyncPlan } from "./utils.js";
+
+const mappings = {
+  "bilt-credit":    { sure: "s1", actual: "dead" },   // actual gone, sure stays
+  "target-credit":  { actual: "dead2" },              // only app → key removed
+  "venmo-cash":     { actual: "a1" },                 // still live → untouched
+  "sofi-credit":    { sure: "s2" },                   // not mapped to actual
+  "usbank-1":       "dead3",                          // legacy string mapping
+};
+const lastTxDates = {
+  "bilt-credit":   { sure: "2026-07-01", actual: "2026-07-02" },
+  "target-credit": { actual: "2026-06-01" },
+  "venmo-cash":    { actual: "2026-05-01" },
+  "usbank-1":      "2026-04-01",                      // legacy shared watermark
+};
+
+const dropped = pruneDeadMappings(mappings, lastTxDates, "actual", new Set(["a1", "s1"]));
+
+assert.deepEqual(dropped.sort(), ["bilt-credit", "target-credit", "usbank-1"]);
+assert.deepEqual(mappings["bilt-credit"], { sure: "s1" }, "other app survives");
+assert.ok(!("target-credit" in mappings), "last app dropped → key removed");
+assert.deepEqual(mappings["venmo-cash"], { actual: "a1" }, "live id untouched");
+assert.deepEqual(mappings["sofi-credit"], { sure: "s2" }, "unrelated app untouched");
+assert.ok(!("usbank-1" in mappings), "legacy string mapping dropped");
+
+assert.deepEqual(lastTxDates["bilt-credit"], { sure: "2026-07-01" }, "dead app's watermark cleared");
+assert.deepEqual(lastTxDates["venmo-cash"], { actual: "2026-05-01" }, "live watermark kept");
+assert.equal(lastTxDates["usbank-1"], "2026-04-01", "legacy string watermark left alone");
+
+assert.deepEqual(pruneDeadMappings({}, {}, "sure", new Set()), [], "no mappings → nothing dropped");
+
+// An empty fetched list never wipes mappings.
+const kept = { "bilt-credit": { actual: "dead" } };
+assert.deepEqual(pruneDeadMappings(kept, {}, "actual", new Set()), [], "empty list → no wipe");
+assert.deepEqual(kept, { "bilt-credit": { actual: "dead" } });
+
+console.log("pruneDeadMappings: OK");
 
 // Deleting transactions in the app must pull the watermark (and the sync window)
 // back — a stored date is never trusted over what the app actually reports.

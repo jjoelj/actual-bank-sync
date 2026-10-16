@@ -23,6 +23,27 @@ export function appTargets(mapping) {
     return mapping;
 }
 
+// Strip mappings to `app` accounts that no longer exist (the app's accounts were
+// reset or recreated), along with their per-app watermark so a remap re-seeds
+// from the new account. Mutates the objects passed in; returns the dropped keys.
+// Legacy string watermarks are left alone — they still apply to the app that
+// stays mapped.
+export function pruneDeadMappings(accountMappings, lastTxDates, app, liveIds) {
+    // An empty list is more often a half-broken connection than a budget with no
+    // accounts, and there'd be nothing to remap to either way — don't wipe on it.
+    if (!liveIds.size) return [];
+    const dropped = [];
+    for (const [key, mapping] of Object.entries(accountMappings)) {
+        const { [app]: id, ...others } = appTargets(mapping);
+        if (!id || liveIds.has(id)) continue;
+        if (Object.keys(others).length) accountMappings[key] = others;
+        else delete accountMappings[key];
+        if (lastTxDates[key] && typeof lastTxDates[key] === "object") delete lastTxDates[key][app];
+        dropped.push(key);
+    }
+    return dropped;
+}
+
 export async function migrateAccountMappings() {
     const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
     let changed = false;

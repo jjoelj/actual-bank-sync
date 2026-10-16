@@ -1,5 +1,5 @@
 import { ACCOUNT_TYPES, BANK_LABELS, getBankForKey } from "./accounts.js";
-import { pacificDate, offsetDate, getSyncPlan, appTargets, migrateAccountMappings } from "./utils.js";
+import { pacificDate, offsetDate, getSyncPlan, appTargets, migrateAccountMappings, pruneDeadMappings } from "./utils.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -138,9 +138,13 @@ async function init() {
   await renderSyncSummary();
   updateSyncBtn();
 
-  if (sureConfigured) loadSureAccounts();
-  if (actualConfigured) loadActualAccounts();
-  if (sureConfigured || actualConfigured) loadCategories();
+  // Sequential, but not awaited: both loads rewrite accountMappings when they
+  // find dead ids, and in parallel the second read would clobber the first write.
+  (async () => {
+    if (sureConfigured) await loadSureAccounts();
+    if (actualConfigured) await loadActualAccounts();
+    if (sureConfigured || actualConfigured) await loadCategories();
+  })();
 }
 
 // ── View management ───────────────────────────────────────────────────────────
@@ -1137,8 +1141,7 @@ async function loadSureAccounts() {
 
     sureAccounts = res.accounts;
     await chrome.storage.local.set({ cachedSureAccounts: sureAccounts });
-    await refreshAppSelects("sure");
-    showStatus("Ready to sync.", "ok");
+    showStatus(...loadedStatus("sure", await refreshAppSelects("sure")));
   } catch (err) {
     showStatus(`Error loading Sure accounts: ${err.message}`, "error");
   }
@@ -1151,22 +1154,50 @@ async function loadActualAccounts() {
 
     actualAccounts = res.accounts;
     await chrome.storage.local.set({ cachedActualAccounts: actualAccounts });
-    await refreshAppSelects("actual");
-    showStatus("Ready to sync.", "ok");
+    showStatus(...loadedStatus("actual", await refreshAppSelects("actual")));
   } catch (err) {
     showStatus(`Error loading Actual accounts: ${err.message}`, "error");
   }
 }
 
+// Drop saved mappings whose account is missing from the freshly fetched list —
+// the app's accounts were reset or recreated, so the id is dead. Left in place
+// they look mapped in the popup but every sync writes to nothing. The stale
+// watermark goes too, so a remap re-seeds from the new account's own history.
+// Returns the mapping keys that were cleared.
+async function dropDeadMappings(app) {
+  const { accountMappings = {}, lastTxDates = {} } = await chrome.storage.local.get(["accountMappings", "lastTxDates"]);
+  const dropped = pruneDeadMappings(accountMappings, lastTxDates, app, new Set(accountsFor(app).map(a => a.id)));
+  if (dropped.length) await chrome.storage.local.set({ accountMappings, lastTxDates });
+  return dropped;
+}
+
 async function refreshAppSelects(app) {
   showView("accounts");
+  const dropped = await dropDeadMappings(app);
+  const justUnmapped = new Set(dropped);
   const { accountMappings = {} } = await chrome.storage.local.get("accountMappings");
   for (const sel of document.querySelectorAll(`select[data-mapping-key][data-app="${app}"]`)) {
+    const row = sel.closest(".account-row");
+    // A row still mapped to the other app stays collapsed, which hides the very
+    // select the user now has to fill in — open the editor on rows we unmapped.
+    if (justUnmapped.has(sel.dataset.mappingKey)) row.classList.add("is-editing");
     refreshSelect(sel, appTargets(accountMappings[sel.dataset.mappingKey])[app]);
-    syncMappingDisplay(sel.closest(".account-row"));
+    syncMappingDisplay(row);
   }
   updateUsedOptions();
+  updateSyncBtn();
   await renderSyncStatus();
+  return dropped;
+}
+
+function loadedStatus(app, dropped) {
+  // No accounts at all: mappings are left alone (nothing to remap to), so say so
+  // rather than "Ready to sync." over a dropdown with nothing in it.
+  if (!accountsFor(app).length) return [`${APP_LABELS[app]} returned no accounts — check that it's pointed at the right budget.`, "error"];
+  if (!dropped.length) return ["Ready to sync.", "ok"];
+  const names = dropped.map(k => document.querySelector(`.account-row[data-row-key="${k}"]`)?.dataset.sourceLabel || k);
+  return [`${APP_LABELS[app]} accounts changed — cleared ${dropped.length} mapping${dropped.length === 1 ? "" : "s"} (${names.join(", ")}). Remap below.`, "error"];
 }
 
 // ── Sync ──────────────────────────────────────────────────────────────────────
