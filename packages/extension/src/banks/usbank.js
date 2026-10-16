@@ -1,4 +1,4 @@
-import { getSyncPlan, seedLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncUSBank(settings, accountMappings, options = {}) {
     console.log("US Bank: starting");
@@ -6,7 +6,7 @@ export async function syncUSBank(settings, accountMappings, options = {}) {
 
     const allKeys = Object.keys(accountMappings).filter(k => k.startsWith("usbank-"));
     const syncKeys = options.syncKeys?.length ? options.syncKeys : allKeys;
-    await seedLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
     const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://onlinebanking.usbank.com/auth/login/");

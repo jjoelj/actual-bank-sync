@@ -503,34 +503,32 @@ function normalizeTxEntry(value, target) {
     return { ...value };
 }
 
-// Seed each mapped app's watermark from the app itself (its latest transaction
-// date, or null when it has none). Only unknown apps are queried, so a newly
-// mapped app gets seeded even when the other app already has a watermark.
-export async function seedLastTxDates(settings, lastTxDates, accountMappings, keys) {
-    let updated = false;
+// Re-read each mapped app's latest transaction date (null when it has none).
+// The app is the source of truth and is asked on every sync, not just the first:
+// a stored watermark only ever moves forward, so deleting transactions in Actual
+// or Sure would otherwise leave the window starting after the hole and the gap
+// would never refill. A failed query keeps whatever was stored.
+export async function refreshLastTxDates(settings, lastTxDates, accountMappings, keys) {
     for (const key of keys) {
         const target = appTargets(accountMappings[key]);
         const entry = normalizeTxEntry(lastTxDates[key], target);
-        if (typeof lastTxDates[key] === "string") updated = true;
-        if (target.sure && entry.sure === undefined) {
+        if (target.sure) {
             try {
                 entry.sure = (await getLatestTransactionDate(target.sure)) ?? null;
-                updated = true;
             } catch (err) {
-                console.warn(`Failed to seed lastTxDate for ${key} from Sure:`, err.message);
+                console.warn(`Failed to read latest Sure transaction for ${key}:`, err.message);
             }
         }
-        if (target.actual && entry.actual === undefined) {
+        if (target.actual) {
             try {
                 entry.actual = (await sendToHost("getLatestTransactionDate", { settings, accountId: target.actual })) ?? null;
-                updated = true;
             } catch (err) {
-                console.warn(`Failed to seed lastTxDate for ${key} from Actual:`, err.message);
+                console.warn(`Failed to read latest Actual transaction for ${key}:`, err.message);
             }
         }
         lastTxDates[key] = entry;
     }
-    if (updated) await chrome.storage.local.set({ lastTxDates });
+    await chrome.storage.local.set({ lastTxDates });
 }
 
 // The sync window starts at the earliest date any mapped app needs: its own

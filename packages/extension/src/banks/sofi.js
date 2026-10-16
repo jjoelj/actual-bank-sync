@@ -1,4 +1,4 @@
-import { APPS, getDateChunks, getSyncPlan, seedLastTxDates, pacificDate, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { APPS, getDateChunks, getSyncPlan, refreshLastTxDates, pacificDate, parseCsvLine, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncSoFi(settings, accountMappings, options = {}) {
     console.log("SoFi: starting");
@@ -14,7 +14,7 @@ export async function syncSoFi(settings, accountMappings, options = {}) {
     // accounts that have a Sure mapping. The credit card is separate and stays
     // scoped to syncKeys.
     const bankingKeys = allSofiKeys.filter(k => k !== "sofi-credit");
-    await seedLastTxDates(settings, lastTxDates, accountMappings, Array.from(new Set([...bankingKeys, ...syncKeys])));
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, Array.from(new Set([...bankingKeys, ...syncKeys])));
     const plans = Object.fromEntries(bankingKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = bankingKeys.filter(k => plans[k]);
     // Fetch every account over one window (the earliest active start date) so

@@ -1,9 +1,9 @@
-import { getSyncPlan, seedLastTxDates, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncTarget(settings, accountMappings, accountKey, options = {}) {
     console.log("Target: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
-    await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
     const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates, accountMappings[accountKey]);
     if (!plan) {
         console.warn("Target: no sync start date configured, skipping.");

@@ -1,9 +1,9 @@
-import { getSyncPlan, seedLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, pacificDate, toLocalDate, openTabBackground, POLL_TIMEOUT_MS, POLL_INTERVAL_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncBilt(settings, accountMappings, accountKey, options = {}) {
     console.log("Bilt: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
-    await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
     const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates, accountMappings[accountKey]);
     if (!plan) {
         console.warn("Bilt: no sync start date configured, skipping.");

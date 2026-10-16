@@ -1,9 +1,9 @@
-import { getSyncPlan, seedLastTxDates, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, toLocalDate, openTabBackground, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncWellsFargo(settings, accountMappings, accountKey, options = {}) {
     console.log("Wells Fargo: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
-    await seedLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, [accountKey]);
     const plan = getSyncPlan(lastSyncDates, syncFromDate, accountKey, lastTxDates, accountMappings[accountKey]);
     if (!plan) {
         console.warn("WF: no sync start date configured, skipping.");

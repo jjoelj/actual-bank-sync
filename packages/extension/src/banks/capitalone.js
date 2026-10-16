@@ -1,4 +1,4 @@
-import { getSyncPlan, seedLastTxDates, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, subtractOneDay, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, pacificDate, openTabBackground, parseCsvLine, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, getDateChunks, subtractOneDay, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncCapitalOne(settings, accountMappings, options = {}) {
     console.log("Capital One: starting");
@@ -6,7 +6,7 @@ export async function syncCapitalOne(settings, accountMappings, options = {}) {
 
     const allKeys = Object.keys(accountMappings).filter(k => k.startsWith("capitalone-"));
     const syncKeys = options.syncKeys?.length ? options.syncKeys : allKeys;
-    await seedLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, syncKeys);
     const plans = Object.fromEntries(syncKeys.map(k => [k, getSyncPlan(lastSyncDates, syncFromDate, k, lastTxDates, accountMappings[k])]));
     const activeKeys = syncKeys.filter(k => plans[k]);
     const tab = await openTabBackground("https://myaccounts.capitalone.com/accountSummary");

@@ -1,9 +1,9 @@
-import { getSyncPlan, seedLastTxDates, parseCsvLine, toLocalDate, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
+import { getSyncPlan, refreshLastTxDates, parseCsvLine, toLocalDate, openTabBackground, reportProgress, updateLastSyncDate, updateLastSyncStats, importTransactions, POLL_INTERVAL_MS, POLL_TIMEOUT_MS, logBalanceDrift, applyActualStartingBalance, onTabClose } from "../utils.js";
 
 export async function syncVenmo(settings, accountMappings, options = {}) {
     console.log("Venmo: starting");
     const { lastSyncDates = {}, syncFromDate, lastTxDates = {} } = await chrome.storage.local.get(["lastSyncDates", "syncFromDate", "lastTxDates"]);
-    await seedLastTxDates(settings, lastTxDates, accountMappings, ["venmo-cash", "venmo-credit"]);
+    await refreshLastTxDates(settings, lastTxDates, accountMappings, ["venmo-cash", "venmo-credit"]);
 
     const cashAccountId = accountMappings["venmo-cash"];
     const creditAccountId = accountMappings["venmo-credit"];
