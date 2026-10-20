@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Unlock Bank Sync</title>
+  <link rel="stylesheet" href="popup.css" />
+  <style>
+    html, body { width: 100%; height: 100%; }
+    body {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; padding: 24px; text-align: center; user-select: none;
+    }
+    .logo { font-size: 30px; color: var(--accent); line-height: 1; margin-bottom: 6px; }
+    h1 { font-size: 16px; font-weight: 600; }
+    #prompt { color: var(--text-muted); font-size: 12px; margin-bottom: 14px; }
+
+    /* One real input sits invisibly over six display cells, so typing, paste
+       and backspace behave natively. */
+    .cells { position: relative; display: flex; gap: 8px; }
+    .cell {
+      width: 38px; height: 46px; border-radius: 8px;
+      background: var(--surface); border: 1px solid var(--border-mid);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; color: var(--text); transition: border-color .12s, box-shadow .12s;
+    }
+    .cell.filled::after { content: "●"; }
+    .cells.focused .cell.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(148 70 237 / .25); }
+    .cells.error .cell { border-color: var(--error); }
+    .cells.busy .cell { opacity: .5; }
+    #pin {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; border: none; padding: 0; caret-color: transparent; cursor: pointer;
+    }
+    .shake { animation: shake .35s; }
+    @keyframes shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+
+    #message { min-height: 18px; margin-top: 10px; font-size: 12px; color: var(--text-dim); }
+    #message.error { color: var(--error); }
+    #forgot {
+      margin-top: 8px; background: none; border: none; padding: 0;
+      color: var(--text-dim); font-size: 11px; cursor: pointer;
+    }
+    #forgot:hover { color: var(--text-muted); text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="logo">⬡</div>
+  <h1 id="title">Unlock saved logins</h1>
+  <div id="prompt">Enter your 6-digit PIN</div>
+  <div class="cells" id="cells">
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    <input id="pin" type="password" inputmode="numeric" maxlength="6" autocomplete="off" aria-labelledby="prompt" autofocus />
+  </div>
+  <div id="message"></div>
+  <button type="button" id="forgot" hidden>Forgot PIN? Clear saved logins</button>
+  <script type="module" src="src/pin.js"></script>
+</body>
+</html>

@@ -18,6 +18,11 @@ export async function autoLogin(tabId, bank, { submit = "enter" } = {}) {
         console.log(`${bank}: no saved login; log in by hand once to save it`);
         return false;
     }
+    if (typeof login.password !== "string") {
+        // Malformed save (seen on sofi): treat as unsaved so the manual login re-saves it.
+        console.warn(`${bank}: saved login has no password (keys: ${Object.keys(login)}); log in by hand to re-save it`);
+        return false;
+    }
 
     try {
         return await withDebugger(tabId, async send => {
@@ -103,7 +108,8 @@ export async function enterTextedCode(tabId, bank, { from, sendButton, sendButto
         await withDebugger(tabId, async send => {
             await focusWhenReady(tabId, sendButton, sendButtonText);
             await jitter(150, 300);
-            await pressKey(send, SPACE);
+            // From the page: WF's button ignores trusted Space and mouse clicks.
+            await chrome.scripting.executeScript({ target: { tabId }, func: () => document.activeElement.click() });
         });
         if (sms instanceof Error) throw sms;
         say("Waiting for the texted code…", 0.5);

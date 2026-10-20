@@ -12,7 +12,7 @@ import { syncUSBank, getUSBankAccountsForPopup } from "./banks/usbank.js";
 import { syncWellsFargo, getWellsFargoAccountsForPopup } from "./banks/wellsfargo.js";
 import { syncSamsung } from "./banks/samsung.js";
 import * as sure from "./sure.js";
-import { sendToHost, saveLogin } from "./host.js";
+import { sendToHost, saveLogin, isUnlocked } from "./host.js";
 import { reconcileAll } from "./reconcile.js";
 import { ACCOUNT_TYPES } from "./accounts.js";
 import { pacificDate, flushPendingCategories, appTargets, migrateAccountMappings, offsetDate } from "./utils.js";
@@ -60,6 +60,10 @@ function sendFlushProgress(key, frac, message) {
   if (message == null) sendProgress(key, null);
   else sendProgress(key, Math.round(frac * 100), message);
 }
+
+// A fresh worker has no sync running: a reload or crash mid-sync leaves the
+// flag behind and the popup stuck on "Sync in progress".
+chrome.storage.local.remove(["activeSyncSessionId", "activeSyncSummary"]);
 
 // ── Alarm setup ──────────────────────────────────────────────────────────────
 
@@ -201,6 +205,11 @@ async function runSync(options = {}) {
     console.warn("Sync skipped: No account mappings configured.");
     return;
   }
+
+  // Saved logins are locked until the PIN is entered once this browser session.
+  // Skipped or timed out → banks fall back to manual sign-in.
+  const { savedLogins = {} } = await chrome.storage.local.get("savedLogins");
+  if (Object.keys(savedLogins).length && !(await ensureUnlocked())) console.warn("PIN not entered; saved logins stay locked this sync.");
 
   const appBalances = await fetchAppBalances(settings, accountMappings);
 
@@ -438,14 +447,45 @@ async function resetAccountFrom(key, app, fromDate) {
   return { deleted };
 }
 
+// ── PIN prompt ───────────────────────────────────────────────────────────────
+// Opens pin.html and resolves true once it unlocks, false if the window is
+// closed. No timeout: the sync waits for the PIN however long it takes.
+// Polls rather than waits on events: the API calls keep the service worker
+// alive meanwhile. Concurrent callers share one window.
+let pinPrompt = null;
+
+function ensureUnlocked() {
+  pinPrompt ??= (async () => {
+    if (await isUnlocked()) return true;
+    // Centered over the browser window (a service worker can't see the screen).
+    const width = 360, height = 340;
+    const at = await chrome.windows.getLastFocused().catch(() => null);
+    const pos = at?.width ? { left: Math.round(at.left + (at.width - width) / 2), top: Math.round(at.top + (at.height - height) / 2) } : {};
+    const win = await chrome.windows.create({ url: "pin.html", type: "popup", width, height, focused: true, ...pos });
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (await isUnlocked()) return true;
+      if (!(await chrome.windows.get(win.id).catch(() => null))) return false;
+    }
+  })().catch(() => false).finally(() => { pinPrompt = null; });
+  return pinPrompt;
+}
+
 // ── Message handler (from popup) ─────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // From a bank content script when the user logs in by hand.
   if (msg.type === "SAVE_LOGIN" && sender.tab) {
-    saveLogin(msg.bank, { username: msg.username, password: msg.password })
+    ensureUnlocked()
+      .then((ok) => { if (!ok) throw new Error("PIN not entered"); })
+      .then(() => saveLogin(msg.bank, { username: msg.username, password: msg.password }))
       .then(() => { console.log(`Saved login for ${msg.bank}`); sendResponse({ ok: true }); })
       .catch((err) => { console.error(`Saving ${msg.bank} login failed:`, err.message); sendResponse({ error: err.message }); });
+    return true;
+  }
+
+  if (msg.type === "UNLOCK_PIN") {
+    ensureUnlocked().then((ok) => sendResponse({ ok }));
     return true;
   }
 

@@ -48,7 +48,7 @@ const KNOWN_LOCAL_KEYS = new Set([
   "rewardsCategories", "bankCategorySpend", "backfillFrom",
   "venmoExpenseCategories", "venmoGroupExpenses", "venmoGroupSplits",
   "venmoGroupActualId", "venmoGroupSureId", "venmoSureSplitState",
-  "savedLogins",
+  "savedLogins", "hostProgress", "pinVault",
 ]);
 
 const PER_ACCOUNT_KEYS = [
@@ -146,6 +146,8 @@ async function init() {
   sortAccountRows();
   const { activeSyncSessionId } = await chrome.storage.local.get("activeSyncSessionId");
   if (activeSyncSessionId) await showSyncRunning();
+  const { hostProgress } = await chrome.storage.local.get("hostProgress");
+  if (hostProgress) showStatus(hostProgress, "");
   await renderSyncStatus();
   await renderSyncSummary();
   updateSyncBtn();
@@ -1175,6 +1177,13 @@ $("save-settings-btn").addEventListener("click", async () => {
   showStatus("Settings saved. Loading accounts...", "");
   await loadActualAccounts();
   loadCategories();
+});
+
+// Unlock (or set) the PIN ahead of a sync. The PIN window steals focus and
+// closes this popup, so a reply only arrives when it was already unlocked.
+$("pin-btn").addEventListener("click", async () => {
+  const { ok } = await sendMessage({ type: "UNLOCK_PIN" });
+  if (ok) showStatus("Saved logins are unlocked.", "ok");
 });
 
 $("reset-btn").addEventListener("click", async () => {
@@ -2267,6 +2276,13 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes.activeSyncSessionId) {
     if (changes.activeSyncSessionId.newValue) await showSyncRunning();
     else showSyncDone();
+  }
+
+  // Host status (e.g. updating the Actual API). When it clears, whatever made
+  // the host call sets its own status; a running sync just gets its line back.
+  if (changes.hostProgress) {
+    if (changes.hostProgress.newValue) showStatus(changes.hostProgress.newValue, "");
+    else if (syncRunning) showStatus("Sync in progress…", "");
   }
 
   if (changes.pendingCategoryTxns || changes.categoryMappings) {

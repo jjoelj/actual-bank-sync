@@ -19,7 +19,6 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
     if (!mapped) return;
 
     const tab = await openTabBackground("https://www.bilt.com/wallet");
-    chrome.windows.update(tab.windowId, { state: "normal", focused: true });   // no auto-login yet
 
     let transactions = [];
     let currentBalance = null;
@@ -28,7 +27,14 @@ export async function syncBilt(settings, accountMappings, accountKey, options = 
         let biltData;
         try {
             // Waiting on the user; the bar holds until they're signed in.
+            // Bilt keeps the session, so it starts minimized; no data after
+            // 15s means a sign-in is needed (no auto-login yet), so show it.
+            let shown = false;
+            const start = Date.now();
             biltData = await pollForBiltData(tab.id, () => {
+                if (shown || Date.now() - start < 15000) return;
+                shown = true;
+                chrome.windows.update(tab.windowId, { state: "normal", focused: true });
                 reportProgress(options, 15, "Sign in in the BILT window");
             });
         } catch (err) {

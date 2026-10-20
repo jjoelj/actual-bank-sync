@@ -55,7 +55,8 @@ async function main() {
     if (LOCAL_COMMANDS[command]) {
       result = LOCAL_COMMANDS[command](rest);
     } else if (COMMANDS.has(command)) {
-      result = await runCommand(settings, command, rest);
+      // Interim { progress } messages precede the final result on the port.
+      result = await runCommand(settings, command, rest, (progress) => writeMessage({ id, progress }));
     } else {
       error = `Unknown command: ${command}`;
     }

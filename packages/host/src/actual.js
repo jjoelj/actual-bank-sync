@@ -1,4 +1,8 @@
-import { spawn } from "child_process";
+import { execFile, spawn } from "child_process";
+import { readFileSync } from "fs";
+import { createRequire } from "module";
+import { join } from "path";
+import { promisify } from "util";
 
 // Commands the worker implements; each request spawns a fresh worker so the
 // Actual API never shares state across requests.
@@ -18,8 +22,42 @@ export const COMMANDS = new Set([
   "applyActualSplits",
 ]);
 
-export async function runCommand(settings, command, args) {
+export async function runCommand(settings, command, args, onProgress) {
+  await matchServerVersion(settings.actualUrl, onProgress);
   return runScript(settings, command, args);
+}
+
+// The api must match the server: an older api can't open a budget carrying
+// newer db migrations. Every command is its own host process and worker, so
+// this runs per command and an install takes effect on this very command.
+// Failures fall through to the installed version.
+async function matchServerVersion(url, onProgress) {
+  if (!url) return;
+  try {
+    const res = await fetch(new URL("info", url.replace(/\/?$/, "/")), { signal: AbortSignal.timeout(5000) });
+    const want = (await res.json())?.build?.version;
+    // The version comes from the network and npm on Windows needs a shell, so
+    // only a bare x.y.z ever reaches the command line.
+    if (!/^\d+\.\d+\.\d+$/.test(want ?? "")) throw new Error(`unexpected server version ${JSON.stringify(want)}`);
+    if (want !== installedApiVersion()) {
+      onProgress?.(`Updating Actual API to ${want}…`);
+      const root = new URL("../../..", import.meta.url).pathname.replace(/^\//, "");
+      await promisify(execFile)("npm", ["install", `@actual-app/api@${want}`, "-w", "actual-bank-sync-host", "--save-exact"],
+        { cwd: root, shell: true, timeout: 300000 });
+    }
+  } catch (err) {
+    console.error("Could not match @actual-app/api to server version:", err?.message ?? err);
+  }
+}
+
+// The api's exports map hides its package.json; step up out of dist/.
+function installedApiVersion() {
+  try {
+    const entry = createRequire(import.meta.url).resolve("@actual-app/api");
+    return JSON.parse(readFileSync(join(entry, "..", "..", "package.json"), "utf8")).version;
+  } catch {
+    return null;
+  }
 }
 
 export async function closeActual() {}
